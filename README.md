@@ -39,3 +39,7 @@ cd dist && python3 -m http.server 8000
 ```
 
 然后打开 http://localhost:8000 。本地运行时联机和排行榜用不了，比赛照常能玩。
+
+## 许可证
+
+[MIT](LICENSE)：可以随意使用、修改、再发布，保留原来的版权声明就行。`public/models/` 里的 3D 模型也一样适用。
