@@ -1,0 +1,9 @@
+{
+  "src": "tripo-out/ice",
+  "assets": {
+    "pine": 512, "icerock_a": 512, "icerock_b": 512, "igloo": 512, "barrels": 512, "marker": 256, "snowmobile": 512,
+    "radar": 512, "station": 1024, "ship": 1024, "arch2": 1024, "icecliff": 1024,
+    "mountain_a": 1024, "mountain_b": 1024, "mountain_c": 1024
+  },
+  "low": { "pine": 700 }
+}

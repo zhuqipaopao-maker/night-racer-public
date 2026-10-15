@@ -1,0 +1,14 @@
+# Cloudflare Pages project (static game in dist/ + Functions in functions/)
+name = "night-racer"
+pages_build_output_dir = "dist"
+compatibility_date = "2026-10-01"
+
+[[durable_objects.bindings]]
+name = "ROOMS"
+class_name = "Room"
+script_name = "night-racer-rooms"
+
+[[durable_objects.bindings]]
+name = "BOARD"
+class_name = "Board"
+script_name = "night-racer-rooms"

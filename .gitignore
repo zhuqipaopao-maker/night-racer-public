@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.wrangler/
+server/.wrangler/
+sound-preview/
+.DS_Store
+tripo-out/
