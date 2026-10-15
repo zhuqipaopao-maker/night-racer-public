@@ -1,9 +1,9 @@
 // Global leaderboard client: best lap per map, uploaded automatically once the player has a name.
 const API = (location.protocol === 'https:' || location.protocol === 'http:' ? '' : 'https://night-racer.pages.dev') + '/api/board';
-const BEST_KEY = { city: 'nr-best-lap', mountain: 'nr-best-lap-mountain', bridge: 'nr-best-lap-bridge', changan: 'nr-best-lap-changan', sky: 'nr-best-lap-sky', canyon: 'nr-best-lap-canyon', metro: 'nr-best-lap-metro', reef: 'nr-best-lap-reef', dream: 'nr-best-lap-dream', deep: 'nr-best-lap-deep' };
+// the same per-map keys main.js stores laps under (every map, so a new one is never left off the board)
 const K = (m, k) => (m === 'city' ? 'nr-' + k : `nr-${k}-${m}`);
 // 标准组 and 改装组 keep separate records and separate boards (the 改装组 board is "<map>_mod" on the server)
-const bestKey = (m, mod) => (mod ? K(m, 'best-lap-mod') : BEST_KEY[m]);
+const bestKey = (m, mod) => K(m, mod ? 'best-lap-mod' : 'best-lap');
 const ghostKey = (m, mod) => K(m, mod ? 'ghost-mod' : 'ghost');
 const apiMap = (m, mod) => (mod ? m + '_mod' : m);
 
@@ -38,7 +38,7 @@ export function createBoard({ store, fmt, maps }) {
       return r.ok ? j : null;
     } catch { return null; }
   }
-  const syncAll = () => Promise.all(Object.keys(BEST_KEY).flatMap(m => [sync(m, false), sync(m, true)]));
+  const syncAll = () => Promise.all(Object.keys(maps).flatMap(m => [sync(m, false), sync(m, true)]));
 
   async function load(map, mod) {
     const r = await fetch(`${API}?map=${apiMap(map, mod)}&uid=${uid}`);
