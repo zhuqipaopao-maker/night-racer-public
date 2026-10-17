@@ -1,0 +1,3 @@
+dirt_diff.webp, dirt_nor.webp: "Forest Ground 04" by Rob Tuytel (photography, processing) and Rico Cilliers (minor adjustment),
+Poly Haven, CC0 1.0 (public domain): https://polyhaven.com/a/forest_ground_04
+Converted from the 1K JPG diffuse and normal (GL) maps to WebP.

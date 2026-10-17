@@ -168,7 +168,10 @@ export function checkerTexture() {
 export function gantryTexture(text = '霓虹街区  ·  START / FINISH') {
   return tex(canvas(1024, 128, (g, w, h) => {
     g.fillStyle = '#07080c'; g.fillRect(0, 0, w, h);
-    g.font = 'bold 76px "PingFang SC",sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    let size = 76;   // shrink long (English) names to fit the board
+    g.font = `bold ${size}px "PingFang SC",sans-serif`;
+    while (size > 30 && g.measureText(text).width > w - 40) { size -= 2; g.font = `bold ${size}px "PingFang SC",sans-serif`; }
+    g.textAlign = 'center'; g.textBaseline = 'middle';
     g.shadowColor = '#2de1ff'; g.shadowBlur = 24; g.fillStyle = '#2de1ff';
     g.fillText(text, w / 2, h / 2 + 4);
   }), { repeat: false });
@@ -326,3 +329,61 @@ export function neonRoadTexture(widthM) {
     for (let y = 0; y < h; y += 8 * px) g.fillRect(w / 2 - 0.12 * px, y, 0.24 * px, 4 * px);
   }));
 }
+
+// Forest track: packed brown dirt with two darker wheel ruts, a mossy strip between them, gravel, puddles in the ruts
+// and moss creeping in from both edges. `widthM` metres across at 32 px/m, 32 m per tile (like mountainRoadTexture).
+export function forestRoadTexture(widthM) {
+  // neutral grey = "plain soil": the photo supplies colour and grain. Darker where the ruts and damp edges are; roots,
+  // tread marks and pine needles are drawn as darker / lighter grey; grass and moss are drawn in colour (the road
+  // shader keeps those colours and puts the soil photo everywhere else).
+  const px = 32, W = Math.round(widthM * px), H = 1024;
+  return tex(canvas(W, H, (g, w, h) => {
+    const r = rand(77), img = g.createImageData(w, h), d = img.data;
+    const P = new Float32Array(4096); for (let i = 0; i < 4096; i++) P[i] = r();
+    const hs = (x, y) => P[(x * 73 + y * 151) & 4095];
+    const vn = (x, y, px2, py2) => { const xi = Math.floor(x), yi = Math.floor(y), xf = x - xi, yf = y - yi, u = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf);
+      const X = n => ((n % px2) + px2) % px2, Y = n => ((n % py2) + py2) % py2;
+      const a = hs(X(xi), Y(yi)), b = hs(X(xi + 1), Y(yi)), c = hs(X(xi), Y(yi + 1)), e = hs(X(xi + 1), Y(yi + 1)); return a + (b - a) * u + (c - a) * v + (a - b - c + e) * u * v; };
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const fx = x / w, fy = y / h;
+      let n = 0, amp = 0.5, f = 1; for (let o = 0; o < 4; o++) { n += vn(fx * 5 * f, fy * 20 * f, 5 * f, 20 * f) * amp; amp *= 0.5; f *= 2; }
+      const wob = Math.sin(fy * 6.283 * 2) * 0.02;
+      const rut = Math.max(Math.exp(-((fx - 0.3 - wob) ** 2) / 0.0035), Math.exp(-((fx - 0.7 - wob) ** 2) / 0.0035));
+      const edge = Math.min(fx, 1 - fx), damp = Math.max(0, 1 - edge / 0.14) * 0.55 + rut * 0.4;
+      const v = 158 + (n - 0.5) * 34 - damp * 62;
+      const i4 = (y * w + x) * 4; d[i4] = v; d[i4 + 1] = v; d[i4 + 2] = v; d[i4 + 3] = 255;
+    }
+    g.putImageData(img, 0, 0);
+    for (const c of [0.3, 0.7]) for (let y = 0; y < h; y += 4) { const x = w * c + Math.sin(y / h * 6.283 * 2) * w * 0.02;   // tread marks
+      g.strokeStyle = 'rgba(70,70,70,0.22)'; g.lineWidth = 1; g.beginPath(); g.moveTo(x - w * 0.045, y); g.lineTo(x + w * 0.045, y + 2); g.stroke(); }
+    for (let i = 0; i < 10; i++) { const fromL = r() < 0.5; let x = fromL ? 0 : w, y = r() * h;   // roots from the edges, darker
+      g.strokeStyle = 'rgba(55,55,55,0.75)'; g.lineWidth = 2 + r() * 3; g.beginPath(); g.moveTo(x, y);
+      for (let k = 0; k < 6; k++) { x += (fromL ? 1 : -1) * w * (0.02 + r() * 0.03); y += (r() - 0.5) * 30; g.lineTo(x, y); } g.stroke(); }
+    for (let i = 0; i < 900; i++) { const x = r() * w, y = r() * h, l = 4 + r() * 12, a = r() * 6.283;   // fallen pine needles and twigs
+      g.strokeStyle = r() < 0.7 ? 'rgba(215,215,215,0.5)' : 'rgba(80,80,80,0.5)'; g.lineWidth = 1; g.beginPath(); g.moveTo(x, y); g.lineTo(x + Math.cos(a) * l, y + Math.sin(a) * l); g.stroke(); }
+    for (let i = 0; i < 2600; i++) { const crown = r() < 0.18, fx = r() < 0.5 ? Math.pow(r(), 2.4) * 0.12 : 1 - Math.pow(r(), 2.4) * 0.12;   // grass at the edges and (sparser) the crown
+      const x = (crown ? 0.5 + (r() - 0.5) * 0.1 : fx) * w, y = r() * h, l = 3 + r() * 9;
+      g.strokeStyle = `rgba(${55 + r() * 40},${85 + r() * 50},${25 + r() * 20},${0.6 + r() * 0.4})`; g.lineWidth = 1 + r() * 1.5; g.beginPath(); g.moveTo(x, y); g.lineTo(x + (r() - 0.5) * 5, y - l); g.stroke(); }
+  }));
+}
+
+// Real forest-track soil (Poly Haven "Forest Ground 04", CC0), tiled in world space (3.15 m per tile). Two samples at
+// different rotation and scale are blended by noise so the tiling never shows. Shared by the track and the verge.
+let _dirt = null;
+export function forestDirt() {
+  if (_dirt) return _dirt;
+  const ld = new THREE.TextureLoader(), mk = (f, srgb) => { const t = ld.load(`models/forest/${f}.webp`); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = 8; if (srgb) t.colorSpace = THREE.SRGBColorSpace; return t; };
+  return (_dirt = { diff: mk('dirt_diff', true), nor: mk('dirt_nor', false) });
+}
+export const DIRT_GLSL = `
+uniform sampler2D uDirt; uniform sampler2D uDirtN;
+float dnh(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float dn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f); return mix(mix(dnh(i), dnh(i + vec2(1, 0)), f.x), mix(dnh(i + vec2(0, 1)), dnh(i + vec2(1, 1)), f.x), f.y); }
+vec2 dirtRot(vec2 p, float a){ float c = cos(a), s = sin(a); return vec2(c * p.x - s * p.y, s * p.x + c * p.y); }
+float dirtMixK(vec2 p){ return smoothstep(0.3, 0.7, dn(p * 0.23)); }
+vec3 dirtAlbedo(vec2 p){ vec2 q = p / 3.15; return mix(texture2D(uDirt, q).rgb, texture2D(uDirt, dirtRot(q, 1.1) * 0.63 + 0.37).rgb, dirtMixK(p)); }
+// the detail's effect on a flat surface's normal, in world space (x, up, z): zero where the map is flat
+vec3 dirtNormalW(vec2 p){ vec2 q = p / 3.15, q2 = dirtRot(q, 1.1) * 0.63 + 0.37;
+  vec3 a = texture2D(uDirtN, q).xyz * 2.0 - 1.0, b = texture2D(uDirtN, q2).xyz * 2.0 - 1.0; b.xy = dirtRot(b.xy, -1.1) * 1.0;
+  vec3 n = mix(a, b, dirtMixK(p)); return vec3(n.x, 0.0, n.y); }
+`;

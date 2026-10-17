@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 
 // 赤岩峡谷 — a desert at sunset: sand flats and dunes, a red-rock plateau the road cuts a canyon through,
 // a ravine to jump, a cliff ledge above a dry riverbed, a natural stone arch, mesas on the horizon,
@@ -121,6 +123,48 @@ export function buildCanyon(scene, track, opts = {}) {
   for (let i = idx(cw0 - 80); i <= idx(led[1] + 60); i++) { fx0 = Math.min(fx0, track.px[i]); fx1 = Math.max(fx1, track.px[i]); fz0 = Math.min(fz0, track.pz[i]); fz1 = Math.max(fz1, track.pz[i]); }
   fx0 -= 80; fx1 += 80; fz0 -= 80; fz1 += 80;
   const inFine = (x, z, m = 0) => x > fx0 + m && x < fx1 - m && z > fz0 + m && z < fz1 - m;
+  // Terrain material: on steep faces (the canyon walls, the ledge, the ravine, mesas cut by the road) it adds sandstone
+  // detail per pixel: thin horizontal bedding, broken by vertical cracks and weathering, both as colour and as bumps
+  // (procedural, in world space, so the walls look like layered rock up close instead of smooth colour bands).
+  const rockMat = new THREE.MeshLambertMaterial({ vertexColors: true });
+  rockMat.onBeforeCompile = sh => {
+    sh.vertexShader = 'varying vec3 vWP; varying vec3 vWN;\n' + sh.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\n vWP = (modelMatrix * vec4(position, 1.0)).xyz; vWN = normalize(mat3(modelMatrix) * normal);');
+    sh.fragmentShader = `varying vec3 vWP; varying vec3 vWN;
+      float h3(vec3 p) { p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
+      float n3(vec3 x) { vec3 i = floor(x), f = fract(x); f = f * f * (3.0 - 2.0 * f);
+        return mix(mix(mix(h3(i), h3(i + vec3(1,0,0)), f.x), mix(h3(i + vec3(0,1,0)), h3(i + vec3(1,1,0)), f.x), f.y),
+                   mix(mix(h3(i + vec3(0,0,1)), h3(i + vec3(1,0,1)), f.x), mix(h3(i + vec3(0,1,1)), h3(i + vec3(1,1,1)), f.x), f.y), f.z); }
+      float fb(vec3 p) { return n3(p) * 0.5 + n3(p * 2.03) * 0.25 + n3(p * 4.1) * 0.125 + n3(p * 8.3) * 0.0625; }
+      // height of the rock surface: bedding ridges (wavy, of uneven thickness), vertical cracks, pitted weathering
+      float rockH(vec3 p) {
+        float warp = fb(p * vec3(0.03, 0.1, 0.03)) * 4.0;
+        float bed = 0.5 + 0.5 * sin(p.y * 1.3 + warp + sin(p.y * 0.37) * 2.0);
+        float thick = 0.5 + 0.5 * sin(p.y * 0.31 + warp * 0.5);   // thick ledges every ~20 m
+        bed = smoothstep(0.15, 0.85, bed) * 0.55 + smoothstep(0.55, 0.95, thick) * 0.45;
+        bed *= 0.6 + 0.4 * fb(p * vec3(0.08, 0.6, 0.08));
+        float crack = smoothstep(0.012, 0.0, abs(fb(p * vec3(0.12, 0.02, 0.12)) - 0.5));
+        return bed * 0.6 + fb(p * 0.9) * 0.4 - crack * 0.3;
+      }
+      vec3 perturbRock(vec3 surf_pos, vec3 surf_norm, vec2 dHdxy) {
+        vec3 vSigmaX = normalize(dFdx(surf_pos)), vSigmaY = normalize(dFdy(surf_pos)), vN = surf_norm;
+        vec3 R1 = cross(vSigmaY, vN), R2 = cross(vN, vSigmaX);
+        float fDet = dot(vSigmaX, R1);
+        return normalize(abs(fDet) * surf_norm - sign(fDet) * (dHdxy.x * R1 + dHdxy.y * R2));
+      }
+      float rockSteep, rockHt;
+      ` + sh.fragmentShader
+      .replace('#include <color_fragment>', `#include <color_fragment>
+        rockSteep = smoothstep(0.82, 0.55, vWN.y);
+        rockHt = rockH(vWP);
+        { float d = smoothstep(4.0, 60.0, length(vViewPosition));   // detail fades with distance (it would only shimmer)
+          float k = rockSteep * (1.0 - d * 0.35);
+          vec3 tint = mix(vec3(0.5, 0.4, 0.38), vec3(1.18, 1.08, 1.0), rockHt);
+          diffuseColor.rgb *= mix(vec3(1.0), tint, k); }`)
+      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+        if (rockSteep > 0.01) { float s = rockSteep * 3.0 * (1.0 - smoothstep(15.0, 120.0, length(vViewPosition)));
+          normal = perturbRock(-vViewPosition, normal, vec2(dFdx(rockHt), dFdy(rockHt)) * s); }`);
+  };
+
   const grid = (cx, cz, w, d, r0, heightFn) => {
     const g = new THREE.PlaneGeometry(w, d, Math.round(w / r0), Math.round(d / r0)); g.rotateX(-Math.PI / 2); g.translate(cx, 0, cz);
     const p = g.attributes.position; for (let k = 0; k < p.count; k++) p.setY(k, heightFn(p.getX(k), p.getZ(k))); g.computeVertexNormals();
@@ -130,7 +174,7 @@ export function buildCanyon(scene, track, opts = {}) {
       if (y < -9) col.lerp(new THREE.Color(0xcfae86), 0.6 * (1 - steep));   // pale dry riverbed / ravine floor
       col.multiplyScalar(0.92 + fbm(x * 0.08, z * 0.08, 2) * 0.16); c.set([col.r, col.g, col.b], k * 3); }
     g.setAttribute('color', new THREE.BufferAttribute(c, 3));
-    const m = new THREE.Mesh(g, new THREE.MeshLambertMaterial({ vertexColors: true })); m.receiveShadow = true; group.add(m);
+    const m = new THREE.Mesh(g, rockMat); m.receiveShadow = true; group.add(m);
     return g;
   };
   const fine = grid((fx0 + fx1) / 2, (fz0 + fz1) / 2, fx1 - fx0, fz1 - fz0, 4 / Math.min(1, Q + 0.5), ground);
@@ -164,7 +208,7 @@ export function buildCanyon(scene, track, opts = {}) {
     for (let k = 0; k < p.count; k++) { const y = p.getY(k); strata(col, y * 60, p.getX(k) * 50, p.getZ(k) * 50, y > 0.98 ? 0.3 : 1); c.set([col.r, col.g, col.b], k * 3); } g.setAttribute('color', new THREE.BufferAttribute(c, 3)); return g; })();
   const mesas = [];
   for (let t = 0; t < 400 && mesas.length < 40; t++) { const a = r() * Math.PI * 2, R = 900 + r() * 1500, cx = (minx + maxx) / 2 + Math.cos(a) * R, cz = (minz + maxz) / 2 + Math.sin(a) * R; if (!far(cx, cz, 350)) continue; const w = 40 + r() * 160; mesas.push([cx, cz, w, w * (0.4 + r() * 0.5), 40 + r() * 110]); }
-  inst(mesaGeo, vcFlat, mesas, (m, [x, z, w, d2, h]) => m.copy(TRS(x, -2, z, 0, r() * 6, 0, w, h, d2)), false);
+  const mesaIM = inst(mesaGeo, vcFlat, mesas, (m, [x, z, w, d2, h]) => m.copy(TRS(x, -2, z, 0, r() * 6, 0, w, h, d2)), false);
 
   // ---------- saguaros, barrel cacti, dead trees, boulders ----------
   const saguaro = (() => { const P = [], G = 0x587a3c;
@@ -185,15 +229,16 @@ export function buildCanyon(scene, track, opts = {}) {
   for (let t = 0; t < 8000 && brush.length < 1400 * Q + 100; t++) { const i = Math.floor(r() * N), sd = r() < 0.5 ? -1 : 1, off = sd * (E + 3 + r() * 90), x = track.px[i] + track.nx[i] * off, z = track.pz[i] + track.nz[i] * off;
     if (!far(x, z, E + 2.5)) continue; const y = flatAt(x, z); if (y === null) continue; brush.push([x, y, z, 0.5 + r() * 0.9, r() * 6]); }
   const up = (m, [x, y, z, s, a]) => m.copy(TRS(x, y - 0.15, z, 0, a, 0, s, s, s));
-  inst(saguaro, vc, sag, (m, [x, y, z, s, a]) => m.copy(TRS(x, y - 0.15, z, 0, a, 0, s * 0.5, s, s * 0.5)));
-  inst(deadTree, vc, dead, up);
-  inst(boulder, vcFlat, rocks, (m, [x, y, z, s, a]) => m.copy(TRS(x, y + s * 0.2, z, a * 0.3, a, 0, s, s * 0.7, s)));
+  const sagIM = inst(saguaro, vc, sag, (m, [x, y, z, s, a]) => m.copy(TRS(x, y - 0.15, z, 0, a, 0, s * 0.5, s, s * 0.5)));
+  const deadIM = inst(deadTree, vc, dead, up);
+  const rockIM = inst(boulder, vcFlat, rocks, (m, [x, y, z, s, a]) => m.copy(TRS(x, y + s * 0.2, z, a * 0.3, a, 0, s, s * 0.7, s)));
   inst(lumpy(new THREE.IcosahedronGeometry(1, 1), 0.5, 3, 2), new THREE.MeshLambertMaterial({ color: 0x8a8a4a, flatShading: true }), brush, (m, [x, y, z, s, a]) => m.copy(TRS(x, y + s * 0.3, z, 0, a, 0, s, s * 0.6, s)), false);
 
   // ---------- gas station at the start ----------
+  let gasG;
   {
     const i = idx(cfg.ctrl ? 40 : 40), side = -1, off = side * (E + 18), x = track.px[i] + track.nx[i] * off, z = track.pz[i] + track.nz[i] * off, yaw = Math.atan2(track.tx[i], track.tz[i]);
-    const G = new THREE.Group(); G.position.set(x, track.py[i] - 0.3, z); G.rotation.y = yaw; group.add(G);
+    const G = gasG = new THREE.Group(); G.position.set(x, track.py[i] - 0.3, z); G.rotation.y = yaw; group.add(G);
     const box = (w, h, d, c, px, py, pz, mat) => { const o = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat || new THREE.MeshLambertMaterial({ color: c })); o.position.set(px, py, pz); o.castShadow = o.receiveShadow = true; G.add(o); return o; };
     box(26, 0.3, 22, 0x8a8478, 0, 0.15, 0);                                     // forecourt
     box(10, 5, 9, 0xe8dcc6, -8, 2.5, -2); box(10.4, 0.5, 9.4, 0xb03a2a, -8, 5.2, -2);   // shop, red trim
@@ -225,14 +270,15 @@ export function buildCanyon(scene, track, opts = {}) {
   }
 
   // ---------- the natural stone arch over the road ----------
+  const archParts = [];
   {
     const i = idx(cfg.arch), yaw = Math.atan2(track.tx[i], track.tz[i]), R = E + 10;
     const g = lumpy(new THREE.TorusGeometry(R, 5, 12, 40, Math.PI), 0.35, 0.12, 3);
     const p = g.attributes.position, c = new Float32Array(p.count * 3), col = new THREE.Color();
     for (let k = 0; k < p.count; k++) { strata(col, p.getY(k) * 1.4, p.getX(k), p.getZ(k), 1); c.set([col.r, col.g, col.b], k * 3); }
     g.setAttribute('color', new THREE.BufferAttribute(c, 3));
-    const arch = new THREE.Mesh(g, vcFlat); arch.position.set(track.px[i], track.py[i] - 3, track.pz[i]); arch.rotation.y = yaw; arch.scale.set(1, 1.35, 1.3); arch.castShadow = arch.receiveShadow = true; group.add(arch);
-    for (const sd of [-1, 1]) { const foot = new THREE.Mesh(boulder, vcFlat); foot.position.set(track.px[i] + track.nx[i] * sd * (R + 2), track.py[i], track.pz[i] + track.nz[i] * sd * (R + 2)); foot.scale.set(9, 6, 9); group.add(foot); }
+    const arch = new THREE.Mesh(g, vcFlat); arch.position.set(track.px[i], track.py[i] - 3, track.pz[i]); arch.rotation.y = yaw; arch.scale.set(1, 1.35, 1.3); arch.castShadow = arch.receiveShadow = true; group.add(arch); archParts.push(arch);
+    for (const sd of [-1, 1]) { const foot = new THREE.Mesh(boulder, vcFlat); foot.position.set(track.px[i] + track.nx[i] * sd * (R + 2), track.py[i], track.pz[i] + track.nz[i] * sd * (R + 2)); foot.scale.set(9, 6, 9); group.add(foot); archParts.push(foot); }
   }
 
   // ---------- tumbleweeds rolling across the road, vultures circling over the canyon ----------
@@ -245,6 +291,77 @@ export function buildCanyon(scene, track, opts = {}) {
   const flocks = []; for (const s of [(cw0 + cw1) / 2, (led[0] + led[1]) / 2, 3300, 4800]) { const i = idx(s); flocks.push([track.px[i], track.py[i] + 60 + r() * 30, track.pz[i], 40 + r() * 30]); }
   const birdData = []; for (let k = 0; k < flocks.length * 3; k++) birdData.push([k % flocks.length, r() * 6.28, (r() - 0.5) * 12, (r() - 0.5) * 20]);
   const birds = new THREE.InstancedMesh(birdGeo, birdMat, birdData.length); group.add(birds);
+
+  // ---------- Tripo props (models/canyon.glb): they replace the built-in cacti, dead trees, boulders, mesas and the
+  // gas station in the same spots, and add barrel cacti, an old pickup and water towers. Until the file arrives, or if
+  // it fails, the built-in ones stay. ----------
+  new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).load('models/canyon.glb', gltf => {
+    const M = new THREE.Matrix4(), box = new THREE.Box3();
+    const asset = name => { const n = gltf.scene.getObjectByName(name); n.updateMatrix(); n.material.envMapIntensity = 0.6;
+      n.geometry.computeBoundingBox(); const size = box.copy(n.geometry.boundingBox).applyMatrix4(n.matrix).getSize(new THREE.Vector3()); return { n, size }; };
+    // items: [x, y, z, yaw, sx, sy, sz] in metres of the finished object (the model is scaled to that size); one
+    // instanced mesh per 300 m cell so off-screen cells are culled
+    const place = (name, list, shadow = true) => {
+      if (!list.length) return;
+      const { n, size } = asset(name), cells = new Map();
+      for (const it of list) { const k = Math.floor(it[0] / 300) + ',' + Math.floor(it[2] / 300); if (!cells.has(k)) cells.set(k, []); cells.get(k).push(it); }
+      for (const items of cells.values()) {
+        const im = new THREE.InstancedMesh(n.geometry, n.material, items.length);
+        items.forEach(([x, y, z, yaw, sx, sy, sz], k) => im.setMatrixAt(k, M.compose(new THREE.Vector3(x, y, z), new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw),
+          new THREE.Vector3(sx / size.x, sy / size.y, sz / size.z)).multiply(n.matrix)));
+        im.computeBoundingSphere(); im.castShadow = shadow; im.receiveShadow = true; group.add(im);
+      }
+    };
+    const fit = (name, h) => { const { size } = asset(name), k = h / size.y; return [size.x * k, h, size.z * k]; };   // keep the model's proportions at height h
+    // The detailed models only where you see them up close: saguaros within 40 m of the road, big boulders within 90 m. Further out
+    // (small on screen anyway) and for pebbles the light built-in ones stay, so the frame rate holds.
+    const near = (x, z, m = 60) => !far(x, z, E + m);
+    const hide = (im, keep) => { const z0 = new THREE.Matrix4().makeScale(0, 0, 0); keep.forEach((k, i) => { if (!k) im.setMatrixAt(i, z0); }); im.instanceMatrix.needsUpdate = true; };
+    const sagNear = sag.map(([x, , z]) => near(x, z, 40)), rockNear = rocks.map(([x, , z, s]) => s > 1.6 && near(x, z, 90));
+    place('saguaro', sag.filter((_, i) => sagNear[i]).map(([x, y, z, s, a]) => [x, y - 0.15, z, a, ...fit('saguaro', s)]), false);
+    place('dead_tree', dead.map(([x, y, z, s, a]) => [x, y - 0.15, z, a, ...fit('dead_tree', s)]), false);
+    place('desert_rock', rocks.filter((_, i) => rockNear[i]).map(([x, y, z, s, a]) => [x, y - s * 0.15, z, a, ...fit('desert_rock', s * 1.4)]), false);   // (no shadows from the many small props: the shadow pass would draw them all again)
+    place('mesa', mesas.map(([x, z, w, d2, h]) => [x, -2, z, hash2(x, z) * 6, w * 2.2, h, d2 * 2.2]), false);
+    place('barrel_cactus', brush.filter(([x, , z], k) => k % 7 === 0 && near(x, z, 25)).slice(0, 50).map(([x, y, z, s, a]) => [x, y - 0.1, z, a, ...fit('barrel_cactus', 0.5 + s * 0.5)]), false);
+    hide(sagIM, sagNear.map(v => !v)); hide(rockIM, rockNear.map(v => !v));
+    deadIM.visible = mesaIM.visible = false;
+    // the gas station, an old pickup beside it and a water tower behind it; another tower and pickup out on the highway
+    { const p = gasG.position, yaw = gasG.rotation.y, fx = Math.sin(yaw), fz = Math.cos(yaw), rx = Math.cos(yaw), rz = -Math.sin(yaw);
+      const at = (a, b) => [p.x + rx * a + fx * b, p.z + rz * a + fz * b];
+      gasG.visible = false;
+      // local -x points at the road here: the forecourt faces it, the pickup and tower stand behind
+      const [gx, gz] = at(2, 0); place('gas_station', [[gx, p.y, gz, yaw - Math.PI / 2, ...fit('gas_station', 6.5)]]);
+      const [px1, pz1] = at(15, 12), [wx1, wz1] = at(28, -12);
+      const roadside = s => { const i = idx(s), off = -(E + 14); return [track.px[i] + track.nx[i] * off, track.pz[i] + track.nz[i] * off, Math.atan2(track.tx[i], track.tz[i])]; };
+      const [px2, pz2, y2] = roadside(4100), [wx2, wz2] = roadside(3300);
+      place('pickup', [[px1, hAt(px1, pz1), pz1, yaw + 0.4, ...fit('pickup', 1.9)], [px2, hAt(px2, pz2), pz2, y2 + 2.6, ...fit('pickup', 1.9)]]);
+      place('water_tower', [[wx1, hAt(wx1, wz1), wz1, 0.3, ...fit('water_tower', 13)], [wx2, hAt(wx2, wz2), wz2, 1.1, ...fit('water_tower', 12)]]);
+    }
+    // sandstone cliff panels lining the canyon (both sides) and the ledge (the wall side), set back from the barrier
+    // and turned to face the road; the two kinds alternate, with a little random tilt so the joins don't line up
+    { const walls = { canyon_wall_a: [], canyon_wall_b: [] }, H = 34;
+      const runs = [[cw0 - 20, rav[0] - 15, [-1, 1], 0.45], [rav[1] + 15, led[0], [-1, 1], 0.45], [led[0], led[1], [-1], 0.25]];   // [from, to, sides, how far back (× depth)]
+      let k = 0;
+      for (const [a, b, sides, back] of runs) for (let s = a; s < b; s += 24) for (const sd of sides) {
+        const kind = (k++ + (s / 24 | 0)) % 2 ? 'canyon_wall_a' : 'canyon_wall_b', [w, h, dep] = fit(kind, H * (0.9 + hash2(s, sd) * 0.3));
+        const i = idx(s), off = sd * (E + 5 + dep * back);
+        walls[kind].push([track.px[i] + track.nx[i] * off, track.py[i] - 4, track.pz[i] + track.nz[i] * off,
+          Math.atan2(track.tx[i], track.tz[i]) - Math.PI / 2 + (sd > 0 ? Math.PI : 0) + (hash2(sd, s) - 0.5) * 0.3, w, h, dep]);
+      }
+      for (const [kind, list] of Object.entries(walls)) place(kind, list);
+      // sandstone spires at the canyon mouth, along the rim and by the arch
+      const spires = [];
+      for (const [s, off, h] of [[cw0 - 60, -45, 30], [cw0 - 40, 50, 24], [cw0 + 200, -70, 26], [cw0 + 420, 75, 32], [led[0] + 150, -60, 28], [led[1] - 120, -55, 24], [cfg.arch - 70, 35, 22], [cfg.arch + 60, -40, 27], [3600, 90, 34], [4500, -110, 30]]) {
+        const i = idx(s), x = track.px[i] + track.nx[i] * off, z = track.pz[i] + track.nz[i] * off;
+        spires.push([x, hAt(x, z) - 1, z, hash2(x, z) * 6, ...fit('rock_spire', h)]);
+      }
+      place('rock_spire', spires);
+      // the arch: the road runs through its opening
+      { const i = idx(cfg.arch), [w, h, dep] = fit('stone_arch', 60);   // sunk 9 m so its base slab is under the road; stretched sideways so the opening clears the road with room to spare
+        place('stone_arch', [[track.px[i], track.py[i] - 9, track.pz[i], Math.atan2(track.tx[i], track.tz[i]), w * 1.7, h, dep]]);
+        archParts.forEach(o => { o.visible = false; }); }
+    }
+  }, undefined, e => console.warn('canyon.glb', e));
 
   const q4 = new THREE.Quaternion(), e4 = new THREE.Euler(), v4 = new THREE.Vector3(), sc4 = new THREE.Vector3(1.4, 1.4, 1.4);
   function update(t, dt, car) {

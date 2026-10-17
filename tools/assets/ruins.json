@@ -1,0 +1,11 @@
+{
+  "src": "tripo-out/colossus",
+  "assets": {
+    "colossus_legs": [2048, "ruined stone pillars 3d model", 0],
+    "colossus_head": [2048, "ancient statue head 3d model", 0],
+    "colossus_arm": [2048, "giant stone arm 3d model", 0],
+    "colossus_torso": [2048, "mossy stone statue 3d model", 0],
+    "cliff_temple": [2048, "ancient temple 3d model", 0]
+  },
+  "cut_below": { "colossus_legs": 0.1 }
+}

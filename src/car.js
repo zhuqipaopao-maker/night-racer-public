@@ -3,35 +3,61 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { radialTexture } from './textures.js';
 
-// Sculpted GT body (Tripo mesh, cut and decimated in Blender: tools/gt-model.py), for maps built in the same detailed
-// style (MAPS[id].sculpted); the older maps keep the extruded bodies. Loaded once and shared by every GT; until it
-// arrives, or if it fails, the extruded body below stands in.
-let gtModel = null, gtWanted = false;
-const gtWaiting = new Set();
-export function useSculptedCars() {
-  if (gtWanted) return;
-  gtWanted = true;
-  new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).load('models/gt.glb',
-    g => { gtModel = g.scene; for (const c of gtWaiting) c.useModel(); gtWaiting.clear(); },
-    undefined, e => console.warn('gt.glb', e));
+// Sculpted bodies (Tripo meshes, cut and decimated in Blender: tools/gt-model.py, tools/car-model.py), for maps built in
+// the same detailed style; since 2026-10-16 every map uses them (main.js calls useSculptedCars). Each model loads the first time
+// a car of that kind appears and is shared by all of them; until it arrives, or if it fails, the extruded body stands in.
+// Lamps and tailpipes in car space: head [x, y, z, bar width] and tilt of the headlight bars, pipes [x, y], glow: where the
+// model's own tail lamps are (see paintedModelMaterial); tail [x, y, z, width] is only used by the ghost car.
+const SCULPTED = {
+  gt: { file: 'models/gt.glb', head: [0.61, 0.66, 1.93, 0.3], tail: [0.64, 0.81, -2.17, 0.3], pipes: [0.51, 0.33], tilt: -0.6, glow: { red: true, zMax: -1.9, xMax: 1.1 } },
+  // the hypercar's tail lamp is one bar right across the back, and its twin pipes sit together in the middle
+  hyper: { file: 'models/hyper.glb', head: [0.6, 0.52, 1.98, 0.32], tail: [0.42, 0.78, -2.12, 0.75], pipes: [0.09, 0.53], tilt: -0.3, glow: { strip: [0.695, 0.735], zMax: -1.95, xMax: 0.85 } },
+};
+let sculptedOn = false;
+const sculpt = {};   // id → { scene, waiting }
+export function useSculptedCars() { sculptedOn = true; }
+function wantModel(id, car) {
+  let m = sculpt[id];
+  if (!m) {
+    m = sculpt[id] = { scene: null, waiting: new Set() };
+    new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).load(SCULPTED[id].file,
+      g => { m.scene = g.scene; for (const c of m.waiting) c.useModel(m.scene, SCULPTED[id]); m.waiting.clear(); },
+      undefined, e => console.warn(SCULPTED[id].file, e));
+  }
+  if (m.scene) car.useModel(m.scene, SCULPTED[id]); else m.waiting.add(car);
 }
-// Where the model's lamps and tailpipes sit, in car space
-const GT_LAMPS = { head: [0.61, 0.66, 1.93, 0.3], tail: [0.64, 0.81, -2.17, 0.3], pipes: [0.51, 0.33] };
 
 // The model is painted white; recolour only the bright, unsaturated texels so glass, tyres and lamps keep their colour.
-function paintedModelMaterial(base, paint, own) {
+// The repainted panels get a metallic lacquer, so their reflections carry the paint colour instead of washing it out
+// toward white. The tail lamps glow from the model itself (brighter when braking): `tail` picks them out either by
+// their red lenses (red: true) or as a strip along the dark tail panel (strip: [y0, y1]), behind zMax, inside |x| < xMax.
+function paintedModelMaterial(base, paint, own, tail = null, toCar = new THREE.Matrix4()) {
   const m = base.clone();
   m.envMapIntensity = own ? 1.3 : 0.9;
-  const tint = new THREE.Color(paint);
-  m.onBeforeCompile = s => {
-    s.uniforms.paint = { value: tint };
-    s.fragmentShader = 'uniform vec3 paint;\n' + s.fragmentShader.replace('#include <map_fragment>', `#include <map_fragment>
-      { float l = dot(diffuseColor.rgb, vec3(0.299, 0.587, 0.114));
-        float sat = max(diffuseColor.r, max(diffuseColor.g, diffuseColor.b)) - min(diffuseColor.r, min(diffuseColor.g, diffuseColor.b));
-        float k = smoothstep(0.3, 0.55, l) * (1.0 - smoothstep(0.05, 0.15, sat));
-        diffuseColor.rgb = mix(diffuseColor.rgb, paint * l * 1.25, k); }`);
+  const U = {
+    paint: { value: new THREE.Color(paint) }, brake: { value: 0 }, toCar: { value: toCar },
+    tailMode: { value: tail ? (tail.red ? 1 : 2) : 0 }, tailBox: { value: new THREE.Vector4(...(tail?.strip || [0, 0]), tail?.zMax ?? 0, tail?.xMax ?? 9) },
   };
-  m.customProgramCacheKey = () => 'gt-paint';
+  m.userData.lamp = U;
+  m.onBeforeCompile = s => {
+    Object.assign(s.uniforms, U);
+    s.vertexShader = 'uniform mat4 toCar; varying vec3 vCar;\n' + s.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\n vCar = (toCar * vec4(position, 1.0)).xyz;');
+    s.fragmentShader = 'uniform vec3 paint; uniform float brake, tailMode; uniform vec4 tailBox; varying vec3 vCar; float paintK, tailK;\n' + s.fragmentShader
+      .replace('#include <map_fragment>', `#include <map_fragment>
+      { vec3 t = diffuseColor.rgb; float l = dot(t, vec3(0.299, 0.587, 0.114));
+        float sat = max(t.r, max(t.g, t.b)) - min(t.r, min(t.g, t.b));
+        paintK = smoothstep(0.3, 0.55, l) * (1.0 - smoothstep(0.05, 0.15, sat));
+        diffuseColor.rgb = mix(t, paint * l * 1.25, paintK);
+        bool back = vCar.z < tailBox.z && abs(vCar.x) < tailBox.w;
+        tailK = 0.0;
+        if (tailMode > 0.5 && tailMode < 1.5 && back) tailK = smoothstep(1.15, 1.6, t.r / max(max(t.g, t.b), 0.004)) * step(0.012, t.r);
+        if (tailMode > 1.5 && back) tailK = smoothstep(tailBox.x, tailBox.x + 0.006, vCar.y) * (1.0 - smoothstep(tailBox.y - 0.006, tailBox.y, vCar.y)) * (1.0 - smoothstep(0.25, 0.45, l));
+      }`)
+      .replace('#include <metalnessmap_fragment>', '#include <metalnessmap_fragment>\n metalnessFactor = mix(metalnessFactor, 0.55, paintK);')
+      .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\n roughnessFactor = mix(roughnessFactor, 0.3, paintK);')
+      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n totalEmissiveRadiance += vec3(1.0, 0.04, 0.03) * tailK * (0.55 + brake * 4.0);');
+  };
+  m.customProgramCacheKey = () => 'sculpted-paint';
   return m;
 }
 
@@ -107,30 +133,34 @@ export class Car {
       this.root.traverse(o => { if (o.isMesh) o.material = gm; });
       this.glowMesh.visible = this.shadowMesh.visible = false;
     }
-    if (this.model === 'gt' && gtWanted) gtModel ? this.useModel() : gtWaiting.add(this);
+    if (sculptedOn && SCULPTED[this.model]) wantModel(this.model, this);
     scene.add(this.root);
     this.reset(0, 0, 0);
   }
 
-  // Swap the extruded GT shell and wheels for the sculpted model, and move the lamps and flames onto it.
-  useModel() {
+  // Swap the extruded shell and wheels for the sculpted model, and move the lamps and flames onto it.
+  useModel(model, spec) {
     const cockpit = !!(this.interior && this.interior.visible);
     for (const m of this.shell) this.body.remove(m);
     this.exterior = this.exterior.filter(m => !this.shell.includes(m));
     // the body has its own baked normal map, so body and wheels each keep their material
-    const paintOf = name => this.ghostMat || paintedModelMaterial(gtModel.getObjectByName(name).material, this.paint, this.opts.lights);
-    const mat = paintOf('body'), wheelMat = paintOf('wheel_FL');
-    const body = gtModel.getObjectByName('body').clone();
+    const src = model.getObjectByName('body'); src.updateMatrix();
+    const mat = this.ghostMat || paintedModelMaterial(src.material, this.paint, this.opts.lights, spec.glow, src.matrix);
+    const wheelMat = this.ghostMat || paintedModelMaterial(model.getObjectByName('wheel_FL').material, this.paint, this.opts.lights);
+    this.lampU = mat.userData.lamp;
+    const body = src.clone();
     body.material = mat; body.visible = !cockpit;
     this.body.add(body); this.exterior.push(body);
-    const [hx, hy, hz, hw] = GT_LAMPS.head, [tx, ty, tz, tw] = GT_LAMPS.tail, [px, py] = GT_LAMPS.pipes;
-    this.headBars.forEach((h, i) => { h.position.set((i ? 1 : -1) * hx, hy, hz); h.scale.x = hw / 0.42; h.rotation.x = -0.6; });
-    this.tailBar.position.set(-tx, ty, tz); this.tailBar.scale.x = tw / 1.6;
-    const tail2 = this.tailBar.clone(); tail2.position.x = tx; tail2.visible = !cockpit;
-    this.body.add(tail2); this.exterior.push(tail2);
+    const [hx, hy, hz, hw] = spec.head, [tx, ty, tz, tw] = spec.tail, [px, py] = spec.pipes;
+    this.headBars.forEach((h, i) => { h.position.set((i ? 1 : -1) * hx, hy, hz); h.scale.x = hw / 0.42; h.rotation.x = spec.tilt; });
+    if (this.ghostMat) {
+      this.tailBar.position.set(-tx, ty, tz); this.tailBar.scale.x = tw / 1.6;
+      const tail2 = this.tailBar.clone(); tail2.position.x = tx; tail2.visible = !cockpit;
+      this.body.add(tail2); this.exterior.push(tail2);
+    } else { this.body.remove(this.tailBar); this.exterior = this.exterior.filter(m => m !== this.tailBar); }
     this.flames.forEach((f, i) => f.position.set((i ? 1 : -1) * px, py, f.position.z));
     for (const w of this.wheels) {
-      const n = gtModel.getObjectByName('wheel_' + (w.front ? 'F' : 'R') + (w.steer.position.x > 0 ? 'L' : 'R'));
+      const n = model.getObjectByName('wheel_' + (w.front ? 'F' : 'R') + (w.steer.position.x > 0 ? 'L' : 'R'));
       w.steer.position.copy(n.position);
       const m = n.clone(); m.position.set(0, 0, 0); m.material = wheelMat;
       w.spin.clear(); w.spin.add(m);
@@ -489,6 +519,7 @@ export class Car {
     }
     for (const w of this.wheels) { w.spin.rotation.x = L(P.spin, this.spin); if (w.front) w.steer.rotation.y = this.drifting ? steerVis : steerVis; }
     this.tailMat.color.setRGB(this.braking ? 2.0 : 1.0, 0.03, 0.03);
+    if (this.lampU) this.lampU.brake.value = this.braking ? 1 : 0;
     if (this.tailLight) this.tailLight.intensity = this.braking ? 2.5 : 0.6;
     const fl = this.boosting || this.mini;
     for (const f of this.flames) { f.visible = fl; if (fl) { const k = (this.boosting ? 1.2 : 0.7) * (0.75 + Math.random() * 0.5); f.scale.set(1, k, 1); f.position.z = -2.4 - 0.45 * k; } }

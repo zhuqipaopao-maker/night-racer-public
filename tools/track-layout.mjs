@@ -5,23 +5,27 @@
 import fs from 'fs';
 import path from 'path';
 
-const SEG = (await import(path.resolve(process.argv[2]))).default;
+const MOD = await import(path.resolve(process.argv[2])), SEG = MOD.default;
+// optional `export const wiggle = { amp, from }`: a gentle meander laid over the drawn line from `from` metres on
+// (two long sine waves, faded in and out so the loop still closes and the start straight stays straight)
 
 function walk(lengths) {
-  let x = 0, z = 0, h = 0, k = 0; const P = [[0, 0]], marks = [];
+  let x = 0, z = 0, h = 0, k = 0, dist = 0; const P = [[0, 0]], marks = [], starts = [];
   const STEP = 36;
   for (const s of SEG) {
-    marks.push(P.length > 1 ? +(P.length - 1) * STEP : 0);
+    starts.push(dist);
     if (s[0] === 'S') {
       const L = s[1] === 'solve' ? lengths[k++] : s[1];
       const n = Math.max(1, Math.round(L / STEP));
       for (let i = 0; i < n; i++) { x += Math.cos(h) * L / n; z += Math.sin(h) * L / n; P.push([x, z]); }
+      dist += L;
     } else {
       const [, R, deg] = s, a = deg * Math.PI / 180, L = R * Math.abs(a), n = Math.max(2, Math.round(L / STEP));
       for (let i = 0; i < n; i++) { const da = a / n, c = 2 * R * Math.sin(Math.abs(da) / 2); h += da / 2; x += Math.cos(h) * c; z += Math.sin(h) * c; h += da / 2; P.push([x, z]); }
+      dist += L;
     }
   }
-  return { P, x, z, h };
+  return { P, x, z, h, starts };
 }
 // position is linear in the two solved lengths (their headings are fixed), so solve the 2x2 system
 const f = l => { const w = walk(l); return [w.x, w.z]; };
@@ -30,11 +34,21 @@ const a = e1[0] - base[0], b = e2[0] - base[0], c = e1[1] - base[1], d = e2[1] -
 const L1 = (-base[0] * d + b * base[1]) / det, L2 = (-a * base[1] + c * base[0]) / det;
 const { P, h } = walk([L1, L2]);
 P.pop();   // last point is back on the first
+if (MOD.wiggle) {
+  const { amp, from = 0 } = MOD.wiggle; let acc = 0; const L = P.reduce((a, p, i) => a + (i ? Math.hypot(p[0] - P[i - 1][0], p[1] - P[i - 1][1]) : 0), 0);
+  const Q = P.map((p, i) => { if (i) acc += Math.hypot(p[0] - P[i - 1][0], p[1] - P[i - 1][1]);
+    const a = P[(i - 1 + P.length) % P.length], b = P[(i + 1) % P.length], tx = b[0] - a[0], tz = b[1] - a[1], tl = Math.hypot(tx, tz) || 1;
+    const fade = Math.min(1, Math.max(0, (acc - from) / 120), Math.max(0, (L - acc) / 120));
+    const o = amp * fade * (Math.sin(acc / 95) * 0.65 + Math.sin(acc / 41 + 1.3) * 0.35);
+    return [p[0] - tz / tl * o, p[1] + tx / tl * o]; });
+  P.splice(0, P.length, ...Q);
+}
 const turn = h * 180 / Math.PI;
 let len = 0; for (let i = 0; i < P.length; i++) { const q = P[(i + 1) % P.length]; len += Math.hypot(q[0] - P[i][0], q[1] - P[i][1]); }
 // closest approach between parts of the loop more than 300 m apart along it
 let minGap = 1e9, at = null; const s = [0]; for (let i = 1; i < P.length; i++) s.push(s[i - 1] + Math.hypot(P[i][0] - P[i - 1][0], P[i][1] - P[i - 1][1]));
 for (let i = 0; i < P.length; i++) for (let j = i + 1; j < P.length; j++) { const ds = Math.min(s[j] - s[i], len - (s[j] - s[i])); if (ds < 300) continue; const g = Math.hypot(P[i][0] - P[j][0], P[i][1] - P[j][1]); if (g < minGap) { minGap = g; at = [Math.round(s[i]), Math.round(s[j])]; } }
+{ const segs = SEG.map(String), w = walk([L1, L2]); console.error('segment starts (m): ' + w.starts.map((m, i) => Math.round(m) + ' ' + segs[i].replace(/,/g, '/')).join(' | ')); }
 console.error(`solved straights ${L1.toFixed(0)} m, ${L2.toFixed(0)} m · total turn ${turn.toFixed(1)}° · lap ${len.toFixed(0)} m · ${P.length} points · closest other part ${minGap.toFixed(0)} m (at ${at})`);
 console.log(JSON.stringify(P.map(([x, z]) => [+x.toFixed(1), +z.toFixed(1)])));
 const out = process.argv[3];

@@ -1,0 +1,53 @@
+{
+  "src": "tripo-out/canyon",
+  "assets": {
+    "saguaro": [
+      512,
+      "saguaro"
+    ],
+    "barrel_cactus": [
+      256,
+      "barrel_cactus"
+    ],
+    "dead_tree": [
+      512,
+      "dead_tree"
+    ],
+    "desert_rock": [
+      512,
+      "desert_rock"
+    ],
+    "mesa": [
+      1024,
+      "mesa"
+    ],
+    "gas_station": [
+      1024,
+      "gas_station"
+    ],
+    "pickup": [
+      512,
+      "pickup"
+    ],
+    "water_tower": [
+      512,
+      "water_tower"
+    ],
+    "canyon_wall_a": [
+      1024,
+      "canyon_wall_a"
+    ],
+    "canyon_wall_b": [
+      1024,
+      "canyon_wall_b"
+    ],
+    "rock_spire": [
+      512,
+      "rock_spire"
+    ],
+    "stone_arch": [
+      1024,
+      "stone_arch"
+    ]
+  }
+}

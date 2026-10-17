@@ -3,9 +3,7 @@
 
 export const CARS = {
   gt:     { name: '街头 GT', price: 0,     desc: '均衡的街头跑车，什么路都能开。', stats: { top: 1.00, accel: 1.00, grip: 1.00, nitro: 1.00 }, tier: 1 },
-  hatch:  { name: '小钢炮',  price: 1500,  desc: '轻巧灵活，过弯抓地好，极速稍低。', stats: { top: 0.95, accel: 1.06, grip: 1.12, nitro: 1.05 }, tier: 0.8 },
-  muscle: { name: '肌肉车',  price: 5000,  desc: '起步猛、氮气足，就是转弯有点飘。', stats: { top: 1.05, accel: 1.12, grip: 0.92, nitro: 1.15 }, tier: 1.4 },
-  hyper:  { name: '超跑',    price: 12000, desc: '最快的车，极速和加速都是顶级。', stats: { top: 1.10, accel: 1.09, grip: 1.06, nitro: 1.06 }, tier: 2 },
+  hyper:  { name: '超跑',    price: 10000, desc: '最快的车，极速和加速都是顶级。', stats: { top: 1.10, accel: 1.09, grip: 1.06, nitro: 1.06 }, tier: 2 },
 };
 export const UPGRADES = {
   engine: { name: '引擎', desc: '极速和加速', per: { top: 0.025, accel: 0.04 } },
@@ -20,7 +18,11 @@ export const PAINTS = [
 export const GLOWS = [
   ['青色', 'rgba(60,220,255,0.9)', 0], ['品红', 'rgba(255,60,200,0.9)', 300], ['翠绿', 'rgba(60,255,120,0.9)', 300], ['琥珀', 'rgba(255,170,40,0.9)', 300], ['纯白', 'rgba(240,240,255,0.9)', 300], ['关闭', 'rgba(0,0,0,0)', 0],
 ];
-export const upgradeCost = (car, level) => Math.round((level + 1) * 300 * CARS[car].tier / 10) * 10;
+// Cars taken out of the garage (until they get sculpted models, 2026-10-15) and what they cost, for refunds
+const RETIRED = { hatch: { name: '小钢炮', price: 1500, tier: 0.8 }, muscle: { name: '肌肉车', price: 5000, tier: 1.4 } };
+// the hypercar used to cost 12000; owners bought before the cut get the difference back
+const PRICE_CUTS = { hyper: 12000 };
+export const upgradeCost = (car, level) => Math.round((level + 1) * 300 * (CARS[car] || RETIRED[car]).tier / 10) * 10;
 
 // daily tasks: [id, text, target, reward]
 const TASKS = [
@@ -30,6 +32,16 @@ const TASKS = [
 ];
 const today = () => { const d = new Date(); return d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate(); };
 const dayIndex = n => Math.floor(Date.UTC(Math.floor(n / 10000), (Math.floor(n / 100) % 100) - 1, n % 100) / 86400000);
+
+// 兑换码 (gift codes) the owner hands out to players. Only a hash of each code lives here, so reading the source
+// doesn't give one away; each code pays once per browser. Codes look like ABCD-EFGH-JKLM (case and dashes don't matter).
+const GIFTS = {
+  7321464675633881: 3000,   // 2026-10-15 新炸坤高手
+  8201806031159553: 20000,   // 2026-10-15 新炸坤高手 (second gift)
+  8279096435227840: 20000,   // 2026-10-15 the owner, to try the hypercar
+};
+const giftHash = s => { let a = 0xdeadbeef, b = 0x41c6ce57; for (let i = 0; i < s.length; i++) { const c = s.charCodeAt(i); a = Math.imul(a ^ c, 2654435761); b = Math.imul(b ^ c, 1597334677); }
+  a = Math.imul(a ^ (a >>> 16), 2246822507) ^ Math.imul(b ^ (b >>> 13), 3266489909); b = Math.imul(b ^ (b >>> 16), 2246822507) ^ Math.imul(a ^ (a >>> 13), 3266489909); return 4294967296 * (2097151 & b) + (a >>> 0); };
 
 export function createProfile(store) {
   const fresh = () => ({ coins: 300, sel: 'gt', cars: { gt: { upg: { engine: 0, tires: 0, nitro: 0 }, paint: 0xc8102e, glow: 0 } }, paints: [0xc8102e, 0xe8e6e0, 0x16161a], glows: [0, 5], streak: { day: 0, n: 0 }, daily: { day: 0, tasks: [] } });
@@ -57,6 +69,20 @@ export function createProfile(store) {
   }
   const loginBonus = newDay();
 
+  // retired cars: refund what they and their upgrades cost, and put the player back in the GT; price cuts: refund the difference
+  const refund = { coins: 0, names: [] };
+  for (const id of Object.keys(P.cars)) {
+    if (CARS[id] || !RETIRED[id]) continue;
+    let n = RETIRED[id].price;
+    for (const lv of Object.values(P.cars[id].upg || {})) for (let l = 0; l < lv; l++) n += upgradeCost(id, l);
+    refund.coins += n; refund.names.push(RETIRED[id].name); delete P.cars[id];
+  }
+  if (!CARS[P.sel]) P.sel = 'gt';
+  P.priceCuts ||= {};
+  for (const [id, was] of Object.entries(PRICE_CUTS)) if (P.cars[id] && !P.priceCuts[id]) { refund.coins += was - CARS[id].price; refund.names.push(CARS[id].name + '降价差价'); }
+  for (const id of Object.keys(PRICE_CUTS)) P.priceCuts[id] = true;   // later buyers pay the new price, nothing to refund
+  P.coins += refund.coins; save();
+
   const carOf = id => (P.cars[id] ||= { upg: { engine: 0, tires: 0, nitro: 0 }, paint: 0xc8102e, glow: 0 });
   // final stats of a car with its upgrades
   function statsOf(id = P.sel) {
@@ -67,7 +93,7 @@ export function createProfile(store) {
   const taskDef = id => TASKS.find(t => t[0] === id);
 
   return {
-    get data() { return P; }, loginBonus, CARS, UPGRADES,
+    get data() { return P; }, loginBonus, refund, CARS, UPGRADES,
     onChange(f) { listeners.push(f); },
     carOf, statsOf, taskDef,
     selected() { return P.sel; },
@@ -82,5 +108,13 @@ export function createProfile(store) {
     task(id, n = 1) { newDay(); let hit = false; for (const t of P.daily.tasks) if (t.id === id && !t.claimed) { const tgt = taskDef(id)[2]; const was = t.prog >= tgt; t.prog = Math.min(tgt, t.prog + n); if (!was && t.prog >= tgt) hit = true; } save(); return hit; },
     claim(i) { const t = P.daily.tasks[i]; if (!t || t.claimed) return 0; const [, , tgt, reward] = taskDef(t.id); if (t.prog < tgt) return 0; t.claimed = true; P.coins += reward; changed(); return reward; },
     earn(n) { P.coins += Math.round(n); changed(); },
+    // returns the coins paid, 0 if this browser already used the code, -1 if there is no such code
+    redeem(code) {
+      const h = giftHash(String(code).replace(/[^0-9a-z]/gi, '').toUpperCase()), amt = GIFTS[h];
+      if (!amt) return -1;
+      P.redeemed ||= [];
+      if (P.redeemed.includes(h)) return 0;
+      P.redeemed.push(h); P.coins += amt; changed(); return amt;
+    },
   };
 }

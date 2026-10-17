@@ -1,0 +1,15 @@
+{
+  "src": "tripo-out/forest",
+  "assets": {
+    "fallen_log": 1024,
+    "giant_cedar": 1024,
+    "broadleaf_tree": 1024,
+    "moss_boulder": 512,
+    "fern": 512,
+    "mossy_trunk": 1024,
+    "scots_pine": 2048,
+    "pine_b": 2048,
+    "long_log": 1024
+  },
+  "decals": "moss_mound, leaf_litter, floor_plants, pebbles (top-down) and pine, young_pine, grass_tuft (front view): tools/bake-topdown.py \u2192 public/models/forest/*.webp"
+}

@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import { neonRoadTexture, roadTexture, puddleTexture, curbTexture, concreteTexture, bannerTexture, fenceTexture, radialTexture, checkerTexture, gantryTexture, mountainRoadTexture, gravelTexture, chevronTexture, stoneRoadTexture, brickTexture, plaqueTexture } from './textures.js';
+import { t as T, LANG } from './i18n.js';
+import { neonRoadTexture, roadTexture, puddleTexture, curbTexture, concreteTexture, bannerTexture, fenceTexture, radialTexture, checkerTexture, gantryTexture, mountainRoadTexture, gravelTexture, chevronTexture, stoneRoadTexture, forestRoadTexture, forestDirt, DIRT_GLSL, brickTexture, plaqueTexture } from './textures.js';
 import { ctrlHeights } from './maps.js';
 import { cityBranches, resample } from './paths.js';
 
@@ -250,7 +251,7 @@ export class Track {
     if (this.cfg.style === 'metro') { /* streets are built by metro.js */ }
     else if (this.cfg.style === 'city') this.buildCityRoad(group);
     else if (this.cfg.style === 'ancient') this.buildAncientRoad(group);
-    else if (this.cfg.style === 'sky' || this.cfg.style === 'dream' || this.cfg.style === 'deep' || this.cfg.style === 'canyon' || this.cfg.style === 'reef' || this.cfg.style === 'ice') this.buildSkyRoad(group);
+    else if (this.cfg.style === 'sky' || this.cfg.style === 'dream' || this.cfg.style === 'deep' || this.cfg.style === 'canyon' || this.cfg.style === 'reef' || this.cfg.style === 'ice' || this.cfg.style === 'film' || this.cfg.style === 'colossus') this.buildSkyRoad(group);
     else this.buildMountainRoad(group);
     this.buildStart(group);
     scene.add(group);
@@ -348,11 +349,35 @@ export class Track {
     const asphalt = reef ? new THREE.MeshStandardMaterial({ map: mountainRoadTexture(H * 2), color: 0x9fb8b4, roughness: 0.85, envMapIntensity: 0.4 })
       : dream ? new THREE.MeshStandardMaterial({ map: neonRoadTexture(H * 2), roughness: 0.45, metalness: 0.15, envMapIntensity: 0.35 })
       : new THREE.MeshStandardMaterial({ map: mountainRoadTexture(H * 2), roughness: 0.78, envMapIntensity: 0.6 });
-    const canyon = this.cfg.style === 'canyon', ice = this.cfg.style === 'ice';
+    const canyon = this.cfg.style === 'canyon', ice = this.cfg.style === 'ice', forest = this.cfg.style === 'colossus';
+    if (forest) {   // a dirt track, mossy edges melting into the forest floor
+      asphalt.map = forestRoadTexture(E * 2); asphalt.color.set(0xffffff); asphalt.roughness = 0.95; asphalt.envMapIntensity = 0.3;
+      asphalt.bumpMap = asphalt.map; asphalt.bumpScale = 2.5;   // the ruts
+      const dirt = forestDirt(), EE = E;
+      // the soil is a real photograph (+ its normal map) in world space; the drawn texture only adds the ruts, damp
+      // edges, roots, needles and grass; the road's edge is worn ragged (noise) so it dissolves into the verge under it
+      asphalt.onBeforeCompile = sh => {
+        sh.uniforms.uDirt = { value: dirt.diff }; sh.uniforms.uDirtN = { value: dirt.nor };
+        sh.vertexShader = 'attribute float soft; varying float vSoft; varying vec3 vWorldP;\n' + sh.vertexShader.replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\n vWorldP = (modelMatrix * vec4(transformed, 1.0)).xyz; vSoft = soft;');
+        sh.fragmentShader = 'varying vec3 vWorldP; varying float vSoft; float roadGreen;\n' + DIRT_GLSL + '\n' + sh.fragmentShader
+          .replace('#include <map_fragment>', `#include <map_fragment>
+            { vec3 pr = diffuseColor.rgb; roadGreen = smoothstep(0.0, 0.05, pr.g - pr.r);
+              float shade = dot(pr, vec3(0.3333)) / 0.62;
+              float big = dn(vWorldP.xz * 0.045) * 0.6 + dn(vWorldP.xz * 0.17) * 0.4;
+              vec3 soil = dirtAlbedo(vWorldP.xz) * vec3(1.42, 1.24, 1.0) * shade * mix(0.78, 1.22, big);
+              soil = mix(soil, soil * vec3(0.9, 0.95, 0.85), smoothstep(0.55, 0.8, dn(vWorldP.xz * 0.03 + 7.0)));
+              diffuseColor.rgb = mix(soil, pr, roadGreen);
+              float ed = min(vMapUv.x, 1.0 - vMapUv.x) * 2.0 * ${EE.toFixed(3)};
+              float thr = vSoft * (0.1 + 1.25 * (dn(vWorldP.xz * 1.7) * 0.6 + dn(vWorldP.xz * 6.0) * 0.4));
+              if (ed < thr) discard; }`)
+          .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+            { vec3 d = dirtNormalW(vWorldP.xz); vec3 dv = (viewMatrix * vec4(d, 0.0)).xyz; normal = normalize(normal + dv * (1.0 - roadGreen) * 1.1); }`);
+      };
+    }
     if (ice) { asphalt.color.set(0xc4d2e2); asphalt.roughness = 0.45; asphalt.envMapIntensity = 0.9; }   // packed snow and ice on the road
-    const slab = ice ? new THREE.MeshStandardMaterial({ color: 0x8fb2d4, roughness: 0.6, side: THREE.DoubleSide }) : canyon ? new THREE.MeshStandardMaterial({ color: 0xa8603e, roughness: 0.95, side: THREE.DoubleSide }) : dream ? new THREE.MeshStandardMaterial({ color: 0x120a24, roughness: 0.6, side: THREE.DoubleSide }) : new THREE.MeshStandardMaterial({ color: 0x8c8a86, roughness: 0.9, side: THREE.DoubleSide });
+    const slab = forest ? new THREE.MeshStandardMaterial({ color: 0x55603f, roughness: 0.95, side: THREE.DoubleSide }) : ice ? new THREE.MeshStandardMaterial({ color: 0x8fb2d4, roughness: 0.6, side: THREE.DoubleSide }) : canyon ? new THREE.MeshStandardMaterial({ color: 0xa8603e, roughness: 0.95, side: THREE.DoubleSide }) : dream ? new THREE.MeshStandardMaterial({ color: 0x120a24, roughness: 0.6, side: THREE.DoubleSide }) : new THREE.MeshStandardMaterial({ color: 0x8c8a86, roughness: 0.9, side: THREE.DoubleSide });
     const jersey = dream ? new THREE.MeshStandardMaterial({ color: 0x38e8ff, transparent: true, opacity: 0.18, roughness: 0.1, metalness: 0.2, side: THREE.DoubleSide, depthWrite: false })
-      : new THREE.MeshStandardMaterial({ map: concreteTexture(), color: canyon ? 0xe0b890 : ice ? 0xe4eef8 : 0xd8d4cc, roughness: 0.85, side: THREE.DoubleSide });
+      : new THREE.MeshStandardMaterial({ map: concreteTexture(), color: canyon ? 0xe0b890 : ice ? 0xe4eef8 : forest ? 0x7d8a62 : 0xd8d4cc, roughness: 0.85, side: THREE.DoubleSide });
     this.beat = { value: 0 };
     const yellow = new THREE.MeshStandardMaterial({ color: 0xf2b705, roughness: 0.5, emissive: 0x3a2a00 });
     const mesh = (g, m) => { const o = new THREE.Mesh(g, m); o.receiveShadow = true; o.castShadow = m !== asphalt; group.add(o); return o; };
@@ -361,22 +386,29 @@ export class Track {
     // upper deck
     for (const [a, b] of runs(i => Number.isFinite(this.up[i]))) {
       const L = i => (this.split[i] ? -halfW(i) : -halfW(i)), R = i => (this.split[i] ? 0 : halfW(i));
-      mesh(this.stripRange(a, b, L, R, upY, upY, 32), asphalt);
+      const deckG = this.stripRange(a, b, L, R, upY, upY, 32);
+      const wl = forest ? (cw => i => cw.some(([p, q]) => i * this.step >= p - 8 && i * this.step <= q + 8))(this.cfg.walls || []) : () => true;
+      { const sf = new Float32Array((b - a + 1) * 2);
+        for (let k = 0; k <= b - a; k++) sf[k * 2] = sf[k * 2 + 1] = forest && !wl(this.wrap(a + k)) ? 1 : 0;
+        deckG.setAttribute('soft', new THREE.BufferAttribute(sf, 1)); }
+      mesh(deckG, asphalt);
       mesh(this.stripRange(a, b, L, R, i => upY(i) - 1.1, i => upY(i) - 1.1, 8), slab);             // underside
-      mesh(this.stripRange(a, b, L, L, upY, i => upY(i) - 1.1, 8), slab);
-      mesh(this.stripRange(a, b, R, R, upY, i => upY(i) - 1.1, 8), slab);
+      const skirt = i => upY(i) - (forest && !wl(i) ? 0 : 1.1);   // forest: no kerb face on the open stretches, the road runs into the ground
+      mesh(this.stripRange(a, b, L, L, upY, skirt, 8), slab);
+      mesh(this.stripRange(a, b, R, R, upY, skirt, 8), slab);
     }
     // low road
     for (const [a, b] of runs(i => Number.isFinite(this.low[i]))) {
       const L = () => -E, R = () => E;
-      mesh(this.stripRange(a, b, L, R, lowY, lowY, 32), asphalt);
+      { const lg = this.stripRange(a, b, L, R, lowY, lowY, 32); lg.setAttribute('soft', new THREE.BufferAttribute(new Float32Array((b - a + 1) * 2), 1)); mesh(lg, asphalt); }
       mesh(this.stripRange(a, b, L, R, i => lowY(i) - 1.1, i => lowY(i) - 1.1, 8), slab);
-      mesh(this.stripRange(a, b, R, R, lowY, i => lowY(i) - 1.1, 8), slab);
+      mesh(this.stripRange(a, b, R, R, lowY, i => lowY(i) - (forest ? 0 : 1.1), 8), slab);
       mesh(this.stripRange(a, b, () => E, () => E, lowY, i => lowY(i) + 0.95, 6), jersey);
       mesh(this.stripRange(a, b, () => -E, () => -E, lowY, i => lowY(i) + 0.95, 6), jersey);
     }
     // jersey barriers along the upper deck, except on the crane jib
-    for (const [a, b] of runs(i => Number.isFinite(this.up[i]) && !this.noWall[i])) for (const sd of [-1, 1]) {
+    const walled = forest ? (cw => i => cw.some(([a, b]) => i * this.step >= a && i * this.step <= b))(this.cfg.walls || []) : () => true;
+    for (const [a, b] of runs(i => Number.isFinite(this.up[i]) && !this.noWall[i] && walled(i))) for (const sd of [-1, 1]) {
       const at = i => (this.split[i] && sd > 0 ? 0.0001 : sd * E);
       if (sd > 0) {   // right side: skip split stretches (the centre wall stands there instead)
         for (const [c, d] of runs(i => i >= a && i <= b && !this.split[i])) mesh(this.stripRange(c, d, () => E, () => E, upY, i => upY(i) + 0.95, 6), jersey);
@@ -404,8 +436,8 @@ export class Track {
     const boostMat = new THREE.MeshBasicMaterial({ map: chev, transparent: true, depthWrite: false, color: dream ? new THREE.Color(0.6, 1.0, 1.1) : new THREE.Color(1.6, 2.4, 2.6), toneMapped: false, blending: THREE.AdditiveBlending });
     for (const [a, b] of runs(i => this.boost[i])) { const m = new THREE.Mesh(this.stripRange(a, b, -H + 0.5, i => (this.split[i] ? -0.6 : H - 0.5), i => upY(i) + 0.04, i => upY(i) + 0.04, 4), boostMat); m.renderOrder = 2; group.add(m); }
     // little blue marker lights along the barrier tops
-    const marks = [];
-    for (let i = 0; i < N; i += 8) if (Number.isFinite(this.up[i]) && !this.noWall[i]) for (const sd of [-1, 1]) if (!(sd > 0 && this.split[i])) marks.push([this.px[i] + this.nx[i] * sd * E, this.up[i] + 1.0, this.pz[i] + this.nz[i] * sd * E]);
+    const marks = [];   // (none in the forest: low mossy stone walls, no lights)
+    if (!forest) for (let i = 0; i < N; i += 8) if (Number.isFinite(this.up[i]) && !this.noWall[i]) for (const sd of [-1, 1]) if (!(sd > 0 && this.split[i])) marks.push([this.px[i] + this.nx[i] * sd * E, this.up[i] + 1.0, this.pz[i] + this.nz[i] * sd * E]);
     if (dream) {
       // glowing rails on the glass barriers and neon edge lines, pulsing with the music
       const neon = (r, g, b) => { const m = new THREE.MeshBasicMaterial({ color: new THREE.Color(r, g, b), toneMapped: false }); m.onBeforeCompile = sh => { sh.uniforms.beat = this.beat; sh.fragmentShader = 'uniform float beat;\n' + sh.fragmentShader.replace('#include <dithering_fragment>', '#include <dithering_fragment>\n gl_FragColor.rgb *= 0.55 + beat * 0.9;'); }; return m; };
@@ -574,7 +606,8 @@ export class Track {
     const metal = new THREE.MeshStandardMaterial({ color: 0x1b1e24, metalness: 0.8, roughness: 0.35 });
     for (const s of [-1, 1]) { const p = new THREE.Mesh(new THREE.BoxGeometry(0.8, 9, 0.8), metal); p.position.set(s * (W + 1.4), 4.5, 0); g.add(p); }
     const beam = new THREE.Mesh(new THREE.BoxGeometry((W + 1.8) * 2, 1.6, 0.9), metal); beam.position.y = 8.4; g.add(beam);
-    const tex = gantryTexture(this.cfg.gantry);
+    // the map name on the start board follows the language; the rest ('START / FINISH', '▲ SECRET ▲') is already English
+    const tex = gantryTexture(LANG === 'zh' ? this.cfg.gantry : this.cfg.gantry.replace(/^[^·]+/, s => T(s.trim()).toUpperCase() + '  '));
     const panel = new THREE.Mesh(new THREE.PlaneGeometry(Math.min(16, W * 2), 2), new THREE.MeshBasicMaterial({ map: tex, toneMapped: false, color: new THREE.Color(1.6, 1.6, 1.6) }));
     panel.position.set(0, 8.4, -0.46); panel.rotation.y = Math.PI; g.add(panel);
     const panel2 = panel.clone(); panel2.position.z = 0.46; panel2.rotation.y = 0; g.add(panel2);

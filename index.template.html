@@ -45,6 +45,7 @@ canvas#gl{display:block;width:100%;height:100%}
 #keys{position:absolute;left:18px;bottom:18px;font-size:13px;color:var(--dim);line-height:1.8;transition:opacity 1s}
 #keys b{color:var(--ink);font-weight:500;display:inline-block;min-width:44px}
 #fx{position:fixed;inset:0;pointer-events:none;background:radial-gradient(ellipse at center,transparent 45%,rgba(30,140,255,.35) 100%);opacity:0;transition:opacity .25s}
+.brand{font-size:15px;font-weight:700;letter-spacing:.45em;color:var(--pink);text-shadow:0 0 12px rgba(255,61,127,.6);margin-bottom:10px}
 #title{position:fixed;inset:0;display:grid;place-items:center;overflow-y:auto;background:radial-gradient(ellipse at 50% 60%,rgba(5,6,10,.35),rgba(5,6,10,.85));padding:24px}
 .tbox{max-width:620px;width:100%;display:grid;gap:20px}
 .tbox .k{font-size:13px;letter-spacing:.4em;color:var(--cyan)}
@@ -154,6 +155,7 @@ body.touch .touchhint{display:flex!important}
 #lobby .rbox{min-width:min(460px,100%)}
 .lstack{display:grid;gap:14px}
 .lrow{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+.lnote{font-size:12px;opacity:.6;margin-top:6px}
 .field{display:grid;gap:6px;font-size:13px;color:var(--dim);letter-spacing:.1em}
 #lobby input{font:500 18px var(--hud);color:var(--ink);background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.25);padding:10px 12px;min-width:0;width:220px;user-select:text;-webkit-user-select:text}
 #lobby input:focus-visible{outline:2px solid var(--cyan)}
@@ -254,7 +256,7 @@ body.glitching canvas{animation:gcan .18s steps(3) infinite}
     <p id="blurb"></p>
     <div class="opts">
       <span class="l">地图</span>
-      <div class="seg" role="group" aria-label="地图"><button data-map="city">霓虹街区 · 雨夜</button><button data-map="mountain">雾岭山道 · 黄昏</button><button data-map="bridge">碧海长桥 · 晴天</button><button data-map="changan">长安灯火 · 元宵夜</button><button data-map="sky">天空工地 · 高空</button><button data-map="canyon">赤岩峡谷 · 黄昏</button><button data-map="metro">云港城区 · 岔路</button><button data-map="reef">珊瑚深海 · 海底</button><button data-map="ice">冰原极光 · 雪夜</button><button data-map="dream" hidden>霓虹梦境 · 秘密</button><button data-map="deep">坠梦 · 长梦</button></div>
+      <div class="seg" role="group" aria-label="地图"><button data-map="city">霓虹街区 · 雨夜</button><button data-map="mountain">雾岭山道 · 黄昏</button><button data-map="bridge">碧海长桥 · 晴天</button><button data-map="changan">长安灯火 · 元宵夜</button><button data-map="sky">天空工地 · 高空</button><button data-map="canyon">赤岩峡谷 · 黄昏</button><button data-map="metro">云港城区 · 岔路</button><button data-map="reef">珊瑚深海 · 海底</button><button data-map="ice">冰原极光 · 雪夜</button><button data-map="colossus">巨像遗迹 · 古林</button><button data-map="dream" hidden>霓虹梦境 · 秘密</button><button data-map="deep">坠梦 · 长梦</button></div>
     </div>
     <div class="opts">
       <span class="l">模式</span>
@@ -309,10 +311,11 @@ body.glitching canvas{animation:gcan .18s steps(3) infinite}
 <div id="board" hidden class="scrollable"><div class="rbox">
   <h2>排行榜</h2>
   <div class="seg" role="group" aria-label="组别" style="margin-bottom:8px"><button data-lbgroup="std">标准组</button><button data-lbgroup="mod">改装组</button></div>
-  <div class="seg" role="group" aria-label="地图"><button data-lbmap="city">霓虹街区</button><button data-lbmap="mountain">雾岭山道</button><button data-lbmap="bridge">碧海长桥</button><button data-lbmap="changan">长安灯火</button><button data-lbmap="sky">天空工地</button><button data-lbmap="canyon">赤岩峡谷</button><button data-lbmap="metro">云港城区</button><button data-lbmap="reef">珊瑚深海</button><button data-lbmap="ice">冰原极光</button><button data-lbmap="dream" hidden>霓虹梦境</button><button data-lbmap="deep">坠梦</button></div>
+  <div class="seg" role="group" aria-label="地图"><button data-lbmap="city">霓虹街区</button><button data-lbmap="mountain">雾岭山道</button><button data-lbmap="bridge">碧海长桥</button><button data-lbmap="changan">长安灯火</button><button data-lbmap="sky">天空工地</button><button data-lbmap="canyon">赤岩峡谷</button><button data-lbmap="metro">云港城区</button><button data-lbmap="reef">珊瑚深海</button><button data-lbmap="ice">冰原极光</button><button data-lbmap="colossus">巨像遗迹</button><button data-lbmap="dream" hidden>霓虹梦境</button><button data-lbmap="deep">坠梦</button></div>
   <p class="note" id="lbme"></p>
   <div class="lbwrap"><table><thead><tr><th>名次</th><th>车手</th><th>最快圈</th></tr></thead><tbody id="lbbody"></tbody></table></div>
   <div class="lrow"><label class="field">你的名字<input id="lbname" maxlength="10" placeholder="起个名字上榜" autocomplete="nickname"></label><button class="go" id="lbsave">保存</button></div>
+  <div class="lnote">你的昵称和最快圈会保存在排行榜服务器上，所有玩家可见。</div>
   <p class="note">每人每张地图记一个最快圈，比赛和计时赛跑出来的都算。</p>
   <div class="lrow"><button class="ghostbtn" id="lbclose">关闭</button></div>
 </div></div>

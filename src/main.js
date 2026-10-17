@@ -3,6 +3,7 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
 import { Track } from './track.js';
 import { buildCity, buildSky, buildEnv } from './city.js';
 import { buildMountain, buildDuskSky } from './mountain.js';
@@ -15,6 +16,7 @@ import { buildCanyon, buildDesertSky } from './canyon.js';
 import { buildMetro } from './metro.js';
 import { buildReef } from './reef.js';
 import { buildIce, buildAuroraSky } from './ice.js';
+import { buildColossus } from './colossus.js';
 import { createProfile } from './profile.js';
 import { openGarage } from './garage.js';
 import { MAPS } from './maps.js';
@@ -28,6 +30,10 @@ import { RaceLine, AIDriver } from './ai.js';
 import { Smoke, Skids, Rain } from './effects.js';
 import { radialTexture } from './textures.js';
 import { Sound } from './audio.js';
+import { t as T, translateDom, LANG } from './i18n.js';
+translateDom(document.body);   // the static page text; everything set from code goes through T()
+import { platformInit, platform } from './platform.js';
+platformInit().then(() => platform.loadingStop());
 
 const $ = id => document.getElementById(id);
 const fmt = t => { if (t == null) return '—'; const m = Math.floor(t / 60), s = t - m * 60; return `${m}:${s.toFixed(3).padStart(6, '0')}`; };
@@ -52,10 +58,12 @@ layout();
 // Graphics presets. iPhones default to the top preset (the user's friends mostly play on iPhones);
 // the adaptive loop below can still step down at run time.
 const GFX_LEVELS = {
-  low:  { label: '流畅',   pr: 0.8, aa: false, bloom: false, shadow: 0,    trees: 0.4, rain: 1200, smoke: 0.35 },
-  mid:  { label: '均衡',   pr: 1.1, aa: false, bloom: true,  shadow: 1024, trees: 0.7, rain: 2500, smoke: 0.7 },
-  high: { label: '高画质', pr: 1.5, aa: true,  bloom: true,  shadow: 2048, trees: 1,   rain: 5000, smoke: 1 },
-  ultra: { label: '极高',  pr: 2.0, aa: true,  bloom: true,  shadow: 2048, trees: 1,   rain: 5000, smoke: 1 },
+  low:  { label: T('流畅'),   pr: 0.8, aa: false, bloom: false, shadow: 0,    trees: 0.4, rain: 1200, smoke: 0.35 },
+  mid:  { label: T('均衡'),   pr: 1.1, aa: false, bloom: true,  shadow: 1024, trees: 0.7, rain: 2500, smoke: 0.7 },
+  high: { label: T('高画质'), pr: 1.5, aa: true,  bloom: true,  shadow: 2048, trees: 1,   rain: 5000, smoke: 1 },
+  ultra: { label: T('极高'),  pr: 2.0, aa: true,  bloom: true,  shadow: 2048, trees: 1,   rain: 5000, smoke: 1 },
+  // computers only: real grass, ambient occlusion, sharp wide shadows (too heavy for phones)
+  max:  { label: T('极致'),   pr: 2.0, aa: true,  bloom: true,  shadow: 4096, trees: 1.3, rain: 6000, smoke: 1, grass: true, ao: false },   // (GTAO's depth/normal pass ignores alphaTest: card trees became pale walls in the sky)
 };
 function autoGfx() {
   if (!TOUCH) return 'high';
@@ -63,7 +71,7 @@ function autoGfx() {
   if (ios) return 'ultra';
   return (navigator.deviceMemory || 4) <= 4 || (navigator.hardwareConcurrency || 4) <= 4 ? 'low' : 'mid';
 }
-const gfxId = GFX_LEVELS[store.get('nr-gfx')] ? store.get('nr-gfx') : autoGfx();
+const gfxId = GFX_LEVELS[store.get('nr-gfx')] && !(TOUCH && store.get('nr-gfx') === 'max') ? store.get('nr-gfx') : autoGfx();
 const GFX = GFX_LEVELS[gfxId];
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: GFX.aa, powerPreference: 'high-performance' });
 let pixelRatio = Math.min(window.devicePixelRatio, GFX.pr);
@@ -88,7 +96,9 @@ renderer.toneMappingExposure = 1.05;
     history.replaceState(null, '', location.pathname + location.search);
   }
 }
-const mapId = MAPS[store.get('nr-map')] ? store.get('nr-map') : 'city';
+// the portal build opens on the icefield (the map on its covers) and lists it first; our own site keeps the old order
+const mapId = MAPS[store.get('nr-map')] ? store.get('nr-map') : (__CG__ ? 'ice' : 'city');
+if (__CG__) for (const sel of ['[data-map=ice]', '[data-lbmap=ice]']) { const b = document.querySelector(sel); if (b) b.parentElement.prepend(b); }
 const MAP = MAPS[mapId];
 const LAPS = MAP.laps;
 const KEY = k => (mapId === 'city' ? 'nr-' + k : `nr-${k}-${mapId}`);   // per-map records (city keeps its original keys)
@@ -107,7 +117,7 @@ scene.environmentIntensity = reflect;
 const track = new Track(MAP);
 track.build(scene);
 let city = { userData: {} };
-let sun = null, sunDir = null, coastScene = null, ancientScene = null, ancientHemi = null, skyScene = null, skyHemi = null, dreamScene = null, deepScene = null, deepHemi = null, deepKey = null, canyonScene = null, metroScene = null, reefScene = null, iceScene = null;
+let sun = null, sunDir = null, coastScene = null, ancientScene = null, ancientHemi = null, skyScene = null, skyHemi = null, dreamScene = null, deepScene = null, deepHemi = null, deepKey = null, canyonScene = null, metroScene = null, reefScene = null, iceScene = null, filmScene = null, colossusScene = null;
 let crackT = 4, beatT = 0, beatN = 0;
 if (MAP.style === 'city') {
   scene.fog = new THREE.FogExp2(0x120d1f, 0.0028);
@@ -227,6 +237,28 @@ if (MAP.style === 'city') {
   iceScene.sky = sky;
   window.__terrainMs = Math.round(performance.now() - tb);
   renderer.toneMappingExposure = 1.05;
+} else if (MAP.style === 'colossus') {
+  // an old-growth forest at midday: soft green haze, sun high and slightly ahead so light falls through the canopy
+  { const i = 0, fx = track.tx[i], fz = track.tz[i];   // low sun ahead-left of the start straight: backlit, long shadows toward the camera
+    sunDir = new THREE.Vector3(fx * 0.75 + fz * 0.45, 0.32, fz * 0.75 - fx * 0.45).normalize(); }
+  scene.fog = new THREE.FogExp2(0xd8bf86, 0.0062);   // warm golden haze toward the low sun
+  const sky = buildDaySky(scene, sunDir); sky.userData.isDay = true;
+  const envScene = new THREE.Scene(); envScene.add(sky.clone());
+  const pm = new THREE.PMREMGenerator(renderer); scene.environment = pm.fromScene(envScene, 0.04).texture; pm.dispose();
+  scene.add(new THREE.HemisphereLight(0xdfe4bc, 0x2a2414, 0.55));
+  sun = new THREE.DirectionalLight(0xffd08a, 4.8);
+  sun.castShadow = GFX.shadow > 0;
+  sun.shadow.mapSize.set(GFX.shadow || 512, GFX.shadow || 512);
+  const SR = GFX.shadow >= 4096 ? 130 : 75;
+  Object.assign(sun.shadow.camera, { left: -SR, right: SR, top: SR, bottom: -SR, near: 10, far: 1600 });
+  sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.6;
+  scene.add(sun, sun.target);
+  renderer.shadowMap.enabled = GFX.shadow > 0; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  const tb = performance.now();
+  colossusScene = buildColossus(scene, track, { quality: GFX.trees, grass: !!GFX.grass, renderer });
+  window.__terrainMs = Math.round(performance.now() - tb);
+  track.group.traverse(o => { if (o.isMesh) o.receiveShadow = true; });
+  renderer.toneMappingExposure = 1.0;
 } else if (MAP.style === 'ancient') {
   scene.fog = new THREE.FogExp2(0x120a14, 0.0009);
   scene.environment = warmEnv(renderer);
@@ -280,7 +312,8 @@ const sound = new Sound(store.get('nr-vol'));
 if (deepScene) { const tc = performance.now(); deepScene.precompile(renderer, camera); window.__compileMs = Math.round(performance.now() - tc); }
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
-let BLOOM = MAP.style === 'reef' ? 0.35 : MAP.style === 'canyon' || MAP.style === 'metro' ? 0.22 : MAP.style === 'dream' || MAP.style === 'deep' ? 0.4 : MAP.style === 'sky' ? 0.25 : MAP.style === 'city' ? 0.7 : MAP.style === 'ancient' ? 0.55 : MAP.style === 'coast' ? 0.25 : 0.45;
+if (GFX.ao) { const ao = new GTAOPass(scene, camera, VW, VH); ao.updateGtaoMaterial({ radius: 1.2, distanceExponent: 1.5, thickness: 2, scale: 1.2 }); ao.blendIntensity = 0.85; composer.addPass(ao); }
+let BLOOM = MAP.style === 'colossus' ? 0.32 : MAP.style === 'reef' ? 0.35 : MAP.style === 'canyon' || MAP.style === 'metro' ? 0.22 : MAP.style === 'dream' || MAP.style === 'deep' ? 0.4 : MAP.style === 'sky' ? 0.25 : MAP.style === 'city' ? 0.7 : MAP.style === 'ancient' ? 0.55 : MAP.style === 'coast' ? 0.25 : 0.45;
 const bloomPass = new UnrealBloomPass(new THREE.Vector2(innerWidth / 2, innerHeight / 2), BLOOM, MAP.style === 'ancient' ? 0.4 : 0.5, MAP.style === 'city' ? 0.92 : MAP.style === 'ancient' ? 0.9 : 0.96);
 composer.addPass(bloomPass);
 rain.visible = MAP.rain;
@@ -298,22 +331,22 @@ addEventListener('orientationchange', () => setTimeout(resize, 300));
 // ---------- racers ----------
 const START_I = 6;
 const AI_SPECS = [
-  { name: '疾风', paint: 0x1f5fff, glow: 'rgba(80,140,255,.9)', skill: 1.0, drifter: true, bias: -0.6 },
-  { name: '白鲨', paint: 0xe4e6ea, ui: '#e4e6ea', glow: 'rgba(220,240,255,.75)', skill: 0.985, bias: 0.8 },
-  { name: '夜猫', paint: 0x16161a, ui: '#b47bff', glow: 'rgba(180,90,255,.9)', skill: 0.97, drifter: true, bias: 0.2 },
-  { name: '阿杰', paint: 0xffaa00, glow: 'rgba(255,190,60,.9)', skill: 0.955, bias: -1.0 },
-  { name: '老K', paint: 0x18a85a, glow: 'rgba(60,255,150,.9)', skill: 0.94, bias: 1.1 },
+  { name: T('疾风'), paint: 0x1f5fff, glow: 'rgba(80,140,255,.9)', skill: 1.0, drifter: true, bias: -0.6 },
+  { name: T('白鲨'), paint: 0xe4e6ea, ui: '#e4e6ea', glow: 'rgba(220,240,255,.75)', skill: 0.985, bias: 0.8 },
+  { name: T('夜猫'), paint: 0x16161a, ui: '#b47bff', glow: 'rgba(180,90,255,.9)', skill: 0.97, drifter: true, bias: 0.2 },
+  { name: T('阿杰'), paint: 0xffaa00, glow: 'rgba(255,190,60,.9)', skill: 0.955, bias: -1.0 },
+  { name: T('老K'), paint: 0x18a85a, glow: 'rgba(60,255,150,.9)', skill: 0.94, bias: 1.1 },
 ];
 // AI pace multipliers. easy/normal also hold back hard when they get ahead of you (see stepRace).
 const DIFF = { easy: 0.6, normal: 0.74, hard: 1.0 };
 const diffOf = d => (DIFF[d] ? d : 'normal');
 const PLAYER_COLOR = '#ff3d7f';
 
-if (MAP.sculpted) useSculptedCars();   // detailed maps race the sculpted GT; the older maps keep their extruded cars
-const player = makeRacer(new Car(scene, { ...profile.look(), stats: myStats() }), '你', true, PLAYER_COLOR);
+useSculptedCars();   // every map races the sculpted cars (2026-10-16); the extruded bodies stand in while they load
+const player = makeRacer(new Car(scene, { ...profile.look(), stats: myStats() }), T('你'), true, PLAYER_COLOR);
 player.skids = new Skids(scene, 1400);
 const rivals = AI_SPECS.map(s => {
-  const r = makeRacer(new Car(scene, { paint: s.paint, lights: false, glow: s.glow, model: ['gt', 'muscle', 'hatch', 'hyper', 'gt'][AI_SPECS.indexOf(s) % 5], stats: myStats() }), s.name, false, s.ui || '#' + new THREE.Color(s.paint).getHexString());
+  const r = makeRacer(new Car(scene, { paint: s.paint, lights: false, glow: s.glow, model: ['gt', 'hyper', 'gt', 'hyper', 'gt'][AI_SPECS.indexOf(s) % 5], stats: myStats() }), s.name, false, s.ui || '#' + new THREE.Color(s.paint).getHexString());
   r.spec = s; r.skids = new Skids(scene, 500);
   r.ai = new AIDriver(r.car, line, { skill: s.skill, bias: s.bias, drifter: s.drifter, name: s.name });
   r.car.root.visible = false;
@@ -396,7 +429,7 @@ let ghostData = store.get(LKEY('ghost'));   // { t, f: [[x,z,h,d,y], ...] } at 3
 let ghostRec = [], recT = 0;
 let camMode = Math.min(3, Math.max(0, store.get('nr-cam') ?? 0)), shake = 0;
 let playerAuto = null;
-const CAM_NAMES = ['追尾视角', '远景追尾', '驾驶舱（第一人称）', '引擎盖视角'];
+const CAM_NAMES = ['追尾视角', '远景追尾', '驾驶舱（第一人称）', '引擎盖视角'].map(s => T(s));
 function nextCam() { camMode = (camMode + 1) % CAM_NAMES.length; store.set('nr-cam', camMode); flash(CAM_NAMES[camMode]); }
 
 function setupGrid() {
@@ -425,7 +458,7 @@ function resetToTrack(r) {
   if (track.paths && c.path) {
     const p = track.pose(c.path, (c.pathK ?? 0) - 8), { bottles, nitro } = c;
     c.reset(p.x, p.z, p.h, p.y); c.bottles = bottles; c.nitro = nitro; c.hint = p.i; c.trackI = p.i;
-    if (r.isPlayer) flash('复位');
+    if (r.isPlayer) flash(T('复位'));
     return;
   }
   const h = Math.atan2(track.tx[i], track.tz[i]);
@@ -433,23 +466,24 @@ function resetToTrack(r) {
   const off = r.ai ? Math.max(-3, Math.min(3, line.off[i] * 0.8)) : 0;
   c.reset(track.px[i] + track.nx[i] * off, track.pz[i] + track.nz[i] * off, h, track.layered ? track.up[i] : track.py[i]);
   c.bottles = bottles; c.nitro = nitro; c.hint = i; c.trackI = i;
-  if (r.isPlayer) flash('复位');
+  if (r.isPlayer) flash(T('复位'));
 }
 setupGrid();
 
 function refreshTitle() {
   document.querySelectorAll('[data-map]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.map === mapId)));
-  $('best').textContent = best ? `你的最快圈：${fmt(best)}` : '';
+  $('best').textContent = best ? T('你的最快圈：{0}', fmt(best)) : '';
   document.querySelectorAll('[data-mode]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.mode === mode)));
   document.querySelectorAll('[data-diff]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.diff === diff)));
   $('diffrow').style.visibility = mode === 'race' ? 'visible' : 'hidden';
-  $('start').textContent = mode === 'race' ? `开始比赛 · ${LAPS} 圈 ▸` : (ghostData ? '开始计时赛 · 挑战幽灵车 ▸' : '开始计时赛 ▸');
+  $('start').textContent = mode === 'race' ? T('开始比赛 · {0} 圈 ▸', LAPS) : T(ghostData ? '开始计时赛 · 挑战幽灵车 ▸' : '开始计时赛 ▸');
 }
 document.querySelectorAll('[data-mode]').forEach(b => b.addEventListener('click', () => { mode = b.dataset.mode; store.set('nr-mode', mode); setupGrid(); refreshTitle(); }));
 document.querySelectorAll('[data-diff]').forEach(b => b.addEventListener('click', () => { diff = b.dataset.diff; store.set('nr-diff', diff); refreshTitle(); }));
 // the secret map never sits in the map list: the only way in is driving the wrong way (its button shows only while you're there)
 for (const id of ['dream']) document.querySelectorAll(`[data-map=${id}],[data-lbmap=${id}]`).forEach(b => { b.hidden = mapId !== id; });
-$('mapname').textContent = MAP.name; $('mapsub').textContent = MAP.sub; $('blurb').textContent = MAP.blurb; document.title = MAP.name;
+$('mapname').textContent = T(MAP.name); $('mapsub').textContent = __CG__ ? T(MAP.sub).replace(/\s*·\s*(STAGE \d+|第.+站)$/, '') : T(MAP.sub);   // the portal reorders the maps, so no stage numbers there $('blurb').textContent = T(MAP.blurb); document.title = T(MAP.name);
+if (__CG__) { document.title = 'Drift Atlas'; const brand = document.createElement('div'); brand.className = 'brand'; brand.textContent = 'DRIFT ATLAS'; document.querySelector('#title .tbox').prepend(brand); }
 document.querySelectorAll('[data-map]').forEach(b => b.addEventListener('click', () => {
   if (b.dataset.map === mapId) return;
   store.set('nr-map', b.dataset.map);
@@ -463,12 +497,13 @@ document.querySelectorAll('[data-group]').forEach(b => {
   b.setAttribute('aria-pressed', String(b.dataset.group === group));
   b.addEventListener('click', () => { if (b.dataset.group === group) return; store.set('nr-group', b.dataset.group); $('loading').hidden = false; setTimeout(() => location.reload(), 30); });
 });
-const showCoins = () => { $('coins').textContent = `🪙 ${profile.data.coins}`; const t = profile.data.daily.tasks, ready = t.filter(x => !x.claimed && x.prog >= profile.taskDef(x.id)[2]).length; $('garagebtn').textContent = ready ? `🚗 车库 · ${ready} 个奖励待领` : '🚗 车库'; };
+const showCoins = () => { $('coins').textContent = `🪙 ${profile.data.coins}`; const ts = profile.data.daily.tasks, ready = ts.filter(x => !x.claimed && x.prog >= profile.taskDef(x.id)[2]).length; $('garagebtn').textContent = ready ? T('🚗 车库 · {0} 个奖励待领', ready) : T('🚗 车库'); };
 profile.onChange(showCoins); showCoins();
 $('garagebtn').addEventListener('click', () => openGarage(profile, {
   onClose(changedLook) { showCoins(); if (changedLook) { $('loading').hidden = false; setTimeout(() => location.reload(), 30); } else player.car.stats = myStats(); },
 }));
-if (profile.loginBonus) setTimeout(() => flash(`连续登录第 ${profile.data.streak.n} 天 · +${profile.loginBonus} 金币`, '#ffd23d'), 1200);
+if (profile.loginBonus) setTimeout(() => flash(T('连续登录第 {0} 天 · +{1} 金币', profile.data.streak.n, profile.loginBonus), '#ffd23d'), 1200);
+if (profile.refund.coins) setTimeout(() => flash(T('{0} · 退还 +{1} 金币', profile.refund.names.map(n => T(n)).join(T('、')), profile.refund.coins), '#ffd23d'), profile.loginBonus ? 4200 : 1200);
 
 // ---------- the secret: drive the wrong way far enough and you fall into 霓虹梦境 (and back out again) ----------
 let backDist = 0, backHint = false;
@@ -496,7 +531,7 @@ function warp(deeper) {
   if (!MAP.secret) store.set('nr-prev-map', mapId);
   store.set('nr-secret', 1); store.set('nr-warp', deeper ? 'deep' : leaving ? 'out' : 'in');
   sound.musicStop(); sound.hit(9);
-  $('glitchtext').textContent = deeper ? '坠入更深的梦……' : leaving ? '正在返回现实……' : '检测到异常时空……';
+  $('glitchtext').textContent = T(deeper ? '坠入更深的梦……' : leaving ? '正在返回现实……' : '检测到异常时空……');
   $('glitch').hidden = false; glitch(2);
   setTimeout(() => { store.set('nr-map', dest); location.reload(); }, 1900);
 }
@@ -504,7 +539,7 @@ function warp(deeper) {
   const w = store.get('nr-warp');
   if (w) {
     store.set('nr-warp', null);
-    $('glitchtext').textContent = w === 'in' ? '欢迎来到 霓虹梦境' : w === 'deep' ? '坠梦 · 这一次，只有一圈' : '你回来了。刚才那是梦吗？';
+    $('glitchtext').textContent = T(w === 'in' ? '欢迎来到 霓虹梦境' : w === 'deep' ? '坠梦 · 这一次，只有一圈' : '你回来了。刚才那是梦吗？');
     $('glitch').hidden = false; $('glitch').classList.add('out'); glitch(1.2);
     setTimeout(() => { $('glitch').hidden = true; $('glitch').classList.remove('out'); }, 2600);
   }
@@ -526,12 +561,13 @@ function startRace() {
   raceTime = 0; ghostRec = []; recT = 0;
   state = 'countdown'; countT = 0; camInit = false; $('volume').hidden = true;
   keys.clear(); $('touch').hidden = false;
-  if (TOUCH && document.fullscreenEnabled && !document.fullscreenElement)
+  platform.gameplay(true);
+  if (!__CG__ && TOUCH && document.fullscreenEnabled && !document.fullscreenElement)   // the portal provides its own fullscreen
     document.documentElement.requestFullscreen?.({ navigationUI: 'hide' }).then(() => screen.orientation?.lock?.('landscape')).catch(() => {});
   setTimeout(() => { $('keys').style.opacity = '0'; }, 14000);
 }
 function toTitle() {
-  state = 'title';
+  state = 'title'; platform.gameplay(false);
   player.car.setCockpit(false);
   $('title').hidden = false; $('results').hidden = true; $('pause').hidden = true; $('hud').hidden = true; $('touch').hidden = true;
   rivals.forEach(r => r.label.hidden = true);
@@ -540,7 +576,7 @@ function toTitle() {
 $('start').addEventListener('click', startRace);
 
 // volume panel (title + pause); V toggles it anywhere
-const VOL = [['master', '总音量'], ['car', '车辆（引擎、轮胎、风噪）'], ['rain', '雨声'], ['sfx', '音效（碰撞、倒计时、提示）'], ['music', '音乐（霓虹梦境）']];
+const VOL = [['master', '总音量'], ['car', '车辆（引擎、轮胎、风噪）'], ['rain', '雨声'], ['sfx', '音效（碰撞、倒计时、提示）'], ['music', '音乐（霓虹梦境）']].map(([k, s]) => [k, T(s)]);
 const volBox = $('volume');
 {
   const seg = (title, opts, cur, onPick, note) => {
@@ -557,33 +593,34 @@ const volBox = $('volume');
     volBox.append(row);
   };
   const head = t => { const d = document.createElement('div'); d.className = 'shead'; d.textContent = t; volBox.append(d); };
-  head('画面');
-  seg('画质', Object.entries(GFX_LEVELS).map(([k, v]) => [k, v.label]), gfxId, v => {
+  head(T('画面'));
+  seg(T('画质'), Object.entries(GFX_LEVELS).filter(([k]) => k !== 'max' || !TOUCH).map(([k, v]) => [k, v.label]), gfxId, v => {
     if (v === gfxId) return;
     store.set('nr-gfx', v);
     if (state === 'title') { $('loading').hidden = false; setTimeout(() => location.reload(), 30); }
-    else flash('回到主菜单后生效');
-  }, '卡顿或手机发烫时选「流畅」。切换后会重新载入。');
-  seg('卡顿时自动降画质', [[true, '开'], [false, '关']], store.get('nr-autodeg') ?? true, v => { autoDegrade = v; store.set('nr-autodeg', v); }, '关掉后始终保持你选的画质，哪怕掉帧。');
+    else flash(T('回到主菜单后生效'));
+  }, T('卡顿或手机发烫时选「流畅」。切换后会重新载入。'));
+  seg(T('卡顿时自动降画质'), [[true, T('开')], [false, T('关')]], store.get('nr-autodeg') ?? true, v => { autoDegrade = v; store.set('nr-autodeg', v); }, T('关掉后始终保持你选的画质，哪怕掉帧。'));
+  seg(T('语言'), [['zh', '中文'], ['en', 'English']], LANG, v => { store.set('nr-lang', v); $('loading').hidden = false; setTimeout(() => location.reload(), 30); });
   {
     const row = document.createElement('label'); row.className = 'vrow'; row.htmlFor = 'refl';
-    const name = document.createElement('span'); name.textContent = '反光强度';
+    const name = document.createElement('span'); name.textContent = T('反光强度');
     const input = document.createElement('input'); input.type = 'range'; input.id = 'refl'; input.min = 0; input.max = 150; input.value = Math.round(reflect * 100);
     const val = document.createElement('b'); val.className = 'num'; val.textContent = input.value;
     input.addEventListener('input', () => { val.textContent = input.value; reflect = input.value / 100; scene.environmentIntensity = reflect; store.set('nr-refl', reflect); });
     row.append(name, input, val); volBox.append(row);
   }
   if (TOUCH) {
-    head('操作');
-    seg('转向方式', [['pad', '滑动转向板'], ['buttons', '左右按钮']], store.get('nr-steer') || 'pad', v => { store.set('nr-steer', v); document.body.classList.toggle('steer-buttons', v === 'buttons'); });
+    head(T('操作'));
+    seg(T('转向方式'), [['pad', T('滑动转向板')], ['buttons', T('左右按钮')]], store.get('nr-steer') || 'pad', v => { store.set('nr-steer', v); document.body.classList.toggle('steer-buttons', v === 'buttons'); });
     const row = document.createElement('label'); row.className = 'vrow'; row.htmlFor = 'sens';
-    const name = document.createElement('span'); name.textContent = '转向灵敏度';
+    const name = document.createElement('span'); name.textContent = T('转向灵敏度');
     const input = document.createElement('input'); input.type = 'range'; input.id = 'sens'; input.min = 50; input.max = 150; input.value = Math.round((store.get('nr-sens') ?? 1) * 100);
     const val = document.createElement('b'); val.className = 'num'; val.textContent = input.value;
     input.addEventListener('input', () => { val.textContent = input.value; steerSens = input.value / 100; store.set('nr-sens', steerSens); });
     row.append(name, input, val); volBox.append(row);
   }
-  head('声音');
+  head(T('声音'));
 }
 for (const [k, label] of VOL) {
   const id = 'vol-' + k;
@@ -605,12 +642,12 @@ function setPaused(p) {
   if (mp) {   // online the race can't stop for everyone: just show/hide the menu
     const show = $('pause').hidden;
     $('pause').hidden = !show; $('restart').hidden = true; $('pausenote').hidden = false;
-    $('quit').textContent = '离开房间';
+    $('quit').textContent = T('离开房间');
     return;
   }
-  $('restart').hidden = false; $('pausenote').hidden = true; $('quit').textContent = '回主菜单';
+  $('restart').hidden = false; $('pausenote').hidden = true; $('quit').textContent = T('回主菜单');
   if (!(state === 'race' || state === 'paused')) return;
-  state = p ? 'paused' : 'race';
+  state = p ? 'paused' : 'race'; platform.gameplay(!p);
   $('pause').hidden = !p;
   if (!p) $('volume').hidden = true;
   keys.clear();
@@ -642,8 +679,8 @@ function onKey(code) {
   if (state === 'paused' && code === 'KeyQ') return toTitle();
   if (state === 'race' && code === 'KeyR') resetToTrack(player);
   if (code === 'KeyC') nextCam();
-  if (code === 'KeyT') { rain.visible = !rain.visible; flash(rain.visible ? '下雨' : '雨停了'); }
-  if (code === 'KeyM') flash(sound.toggleMute() ? '静音' : '声音开');
+  if (code === 'KeyT') { rain.visible = !rain.visible; flash(T(rain.visible ? '下雨' : '雨停了')); }
+  if (code === 'KeyM') flash(T(sound.toggleMute() ? '静音' : '声音开'));
   if (code === 'KeyV') toggleVol();
 }
 
@@ -655,12 +692,12 @@ resetRun();
 function payout(pos) {
   const lenF = Math.max(0.6, Math.min(2.2, track.length * LAPS / 3000));
   const lines = [];
-  if (pos) lines.push([`第 ${pos} 名`, Math.round([200, 140, 100, 70, 50, 40][Math.min(5, pos - 1)] * lenF)]);
-  else lines.push([`跑完 ${run.laps} 圈`, run.laps * 40]);
-  if (run.drift > 1) lines.push([`漂移 ${run.drift.toFixed(0)} 秒`, Math.round(run.drift * 3)]);
-  if (run.jumps) lines.push([`腾空 ${run.jumps} 次`, run.jumpCoins]);
-  if (run.nitro) lines.push([`氮气 ${run.nitro} 次`, run.nitro * 5]);
-  if (run.record) lines.push(['刷新最快圈', 100]);
+  if (pos) lines.push([T('第 {0} 名', pos), Math.round([200, 140, 100, 70, 50, 40][Math.min(5, pos - 1)] * lenF)]);
+  else lines.push([T('跑完 {0} 圈', run.laps), run.laps * 40]);
+  if (run.drift > 1) lines.push([T('漂移 {0} 秒', run.drift.toFixed(0)), Math.round(run.drift * 3)]);
+  if (run.jumps) lines.push([T('腾空 {0} 次', run.jumps), run.jumpCoins]);
+  if (run.nitro) lines.push([T('氮气 {0} 次', run.nitro), run.nitro * 5]);
+  if (run.record) lines.push([T('刷新最快圈'), 100]);
   const total = lines.reduce((a, l) => a + l[1], 0);
   profile.earn(total);
   // daily tasks
@@ -702,7 +739,7 @@ function lapCheck(r, prevI) {
   if (mode === 'race' && r.lapsDone >= LAPS && !r.finished) {
     r.finished = true; r.finishTime = mp ? (net.now() - mp.at) / 1000 : raceTime;
     if (r.isPlayer) onPlayerFinish();
-  } else if (mode === 'race' && r.isPlayer && LAPS > 1 && r.lapsDone === LAPS - 1) flash('最后一圈！', '#ffd23d');
+  } else if (mode === 'race' && r.isPlayer && LAPS > 1 && r.lapsDone === LAPS - 1) flash(T('最后一圈！'), '#ffd23d');
 }
 
 function onPlayerLap(t) {
@@ -714,20 +751,20 @@ function onPlayerLap(t) {
     store.set(LKEY('ghost'), ghostData);
   }
   if (isBest) {
-    flash(`最快圈！${fmt(t)}`, '#ffd23d'); sound.chime();
+    flash(T('最快圈！{0}', fmt(t)), '#ffd23d'); sound.chime();
     if (ancientScene) ancientScene.celebrate(player.car.x, player.car.y, player.car.z, player.car.h);
-    board.sync(mapId, group === 'mod').then(r => { if (r && r.rank) setTimeout(() => flash(`排行榜第 ${r.rank} 名`, '#ffd23d'), 1500); });
+    board.sync(mapId, group === 'mod').then(r => { if (r && r.rank) setTimeout(() => flash(T('排行榜第 {0} 名', r.rank), '#ffd23d'), 1500); });
   }
-  else if (mode === 'trial') flash(`单圈 ${fmt(t)}`, '#2de1ff');
+  else if (mode === 'trial') flash(T('单圈 {0}', fmt(t)), '#2de1ff');
   run.laps++;
-  if (mode === 'trial') { const p = payout(0); resetRun(); setTimeout(() => flash(`+${p.total} 金币`, '#ffd23d'), isBest ? 1400 : 700); if (p.done.length) setTimeout(() => flash('每日任务完成！去车库领奖励', '#9fff7a'), 2600); }
+  if (mode === 'trial') { const p = payout(0); resetRun(); setTimeout(() => flash(T('+{0} 金币', p.total), '#ffd23d'), isBest ? 1400 : 700); if (p.done.length) setTimeout(() => flash(T('每日任务完成！去车库领奖励'), '#9fff7a'), 2600); }
 }
 
 function onPlayerFinish() {
-  state = 'finished'; finishedT = 0;
+  state = 'finished'; finishedT = 0; platform.gameplay(false);
   const pos = standings().indexOf(player) + 1;
   lastPay = payout(pos); resetRun();
-  flash(pos === 1 ? '冠军！' : `第 ${pos} 名完赛`, pos === 1 ? '#ffd23d' : '#2de1ff');
+  flash(pos === 1 ? T('冠军！') : T('第 {0} 名完赛', pos), pos === 1 ? '#ffd23d' : '#2de1ff');
   if (pos === 1) sound.chime();
   if (pos === 1 && mapId === 'dream' && mode === 'race' && !mp) setTimeout(() => { if (state === 'finished') warp(true); }, 2200);
   if (ancientScene) ancientScene.celebrate(player.car.x, player.car.y, player.car.z, player.car.h);
@@ -740,20 +777,20 @@ function showResults() {
   const tb = $('rbody'); tb.replaceChildren();
   rows.forEach((r, k) => {
     const tr = document.createElement('tr'); if (r.isPlayer) tr.className = 'me';
-    const time = r.finished ? (k === 0 ? fmt(r.finishTime) : '+' + (r.finishTime - leader.finishTime).toFixed(3)) : '行驶中';
+    const time = r.finished ? (k === 0 ? fmt(r.finishTime) : '+' + (r.finishTime - leader.finishTime).toFixed(3)) : T('行驶中');
     [k + 1, r.name, time, fmt(r.bestLap)].forEach((v, c) => { const td = document.createElement('td'); td.textContent = v; if (c === 1) td.style.color = r.color; tr.append(td); });
     tb.append(tr);
   });
   const pos = rows.indexOf(player) + 1;
-  $('rtitle').textContent = pos === 1 ? '冠军' : `第 ${pos} 名`;
+  $('rtitle').textContent = pos === 1 ? T('冠军') : T('第 {0} 名', pos);
   $('again').hidden = !!mp && !mp.isHost;
-  $('again').textContent = mp ? '回到房间再来一局 ▸' : '再来一场 ▸';
-  $('menu').textContent = mp ? '离开房间' : '回主菜单';
+  $('again').textContent = T(mp ? '回到房间再来一局 ▸' : '再来一场 ▸');
+  $('menu').textContent = T(mp ? '离开房间' : '回主菜单');
   $('rwait').hidden = !(mp && !mp.isHost);
   const cs = $('coinsum');
-  if (lastPay) { cs.hidden = false; cs.replaceChildren(); const h = document.createElement('div'); h.className = 'ctot'; h.textContent = `+${lastPay.total} 金币`; cs.append(h);
+  if (lastPay) { cs.hidden = false; cs.replaceChildren(); const h = document.createElement('div'); h.className = 'ctot'; h.textContent = T('+{0} 金币', lastPay.total); cs.append(h);
     for (const [k, v] of lastPay.lines) { const d = document.createElement('div'); d.textContent = `${k}  +${v}`; cs.append(d); }
-    for (const t of lastPay.done) { const d = document.createElement('div'); d.className = 'ctask'; d.textContent = `✓ 每日任务完成：${t}（去车库领取）`; cs.append(d); }
+    for (const t of lastPay.done) { const d = document.createElement('div'); d.className = 'ctask'; d.textContent = T('✓ 每日任务完成：{0}（去车库领取）', T(t)); cs.append(d); }
   } else cs.hidden = true;
 }
 
@@ -827,9 +864,9 @@ function stepRace(dt, playerInput) {
     if (r.isPlayer && !mp && state === 'race') wrongWayCheck(c, prevI);
     if (r.isPlayer) {
       for (const ev of c.events) {
-        if (ev === 'miniBoost') flash('小喷！', '#2de1ff');
-        if (ev === 'bottle') flash('氮气 +1', '#2de1ff');
-        if (ev === 'boost') { flash('氮气！', '#9b6bff'); shake = Math.max(shake, 0.12); run.nitro++; }
+        if (ev === 'miniBoost') flash(T('小喷！'), '#2de1ff');
+        if (ev === 'bottle') flash(T('氮气 +1'), '#2de1ff');
+        if (ev === 'boost') { flash(T('氮气！'), '#9b6bff'); shake = Math.max(shake, 0.12); run.nitro++; }
         if (ev === 'land') {
           shake = Math.max(shake, Math.min(0.6, 0.08 + c.landImpact * 0.05)); sound.hit(4 + c.landImpact * 2);
           const dist = c.takeoffX != null ? Math.hypot(c.x - c.takeoffX, c.z - c.takeoffZ) : 0;
@@ -837,9 +874,9 @@ function stepRace(dt, playerInput) {
           if (c.airT > 0.6 && dist > 20) {
             run.jumps++; run.jumpCoins += Math.floor(dist / 4);
             const rec = store.get(KEY('best-jump')) || 0;
-            if (dist > rec && state === 'race') { store.set(KEY('best-jump'), dist); flash(`最远一跳！${dist.toFixed(0)} 米 · ${c.airT.toFixed(1)} 秒`, '#ffd23d'); }
-            else flash(`腾空 ${c.airT.toFixed(1)} 秒 · ${dist.toFixed(0)} 米`, '#ffd23d');
-          } else if (c.airT > 0.35) flash(`腾空 ${c.airT.toFixed(1)} 秒`, '#ffd23d');
+            if (dist > rec && state === 'race') { store.set(KEY('best-jump'), dist); flash(T('最远一跳！{0} 米 · {1} 秒', dist.toFixed(0), c.airT.toFixed(1)), '#ffd23d'); }
+            else flash(T('腾空 {0} 秒 · {1} 米', c.airT.toFixed(1), dist.toFixed(0)), '#ffd23d');
+          } else if (c.airT > 0.35) flash(T('腾空 {0} 秒', c.airT.toFixed(1)), '#ffd23d');
         }
         if (ev === 'boostpad') { shake = Math.max(shake, 0.1); sound.hit(2); }
       }
@@ -960,11 +997,11 @@ function updateHud(dt) {
   $('tlast').textContent = fmt(player.lastLap);
   $('tbest').textContent = fmt(mode === 'race' ? player.bestLap : best);
   if (mode === 'race') {
-    $('lapn').textContent = `第 ${Math.min(LAPS, Math.max(1, player.lapsDone + 1))} / ${LAPS} 圈`;
+    $('lapn').textContent = T('第 {0} / {1} 圈', Math.min(LAPS, Math.max(1, player.lapsDone + 1)), LAPS);
     const pos = standings().indexOf(player) + 1;
     $('posn').textContent = pos; $('post').textContent = `/${racers.length}`;
     $('total').textContent = fmt(running ? (player.finished ? player.finishTime : raceTime) : 0);
-  } else $('lapn').textContent = `第 ${player.lapsDone + 1} 圈`;
+  } else $('lapn').textContent = T('第 {0} 圈', player.lapsDone + 1);
   [...$('bottles').children].forEach((b, k) => b.classList.toggle('on', k < c.bottles));
   $('nbar').firstElementChild.style.width = c.nitro + '%';
   $('fx').style.opacity = c.boosting ? 1 : c.mini ? 0.5 : 0;
@@ -1012,8 +1049,9 @@ function updateCamera(dt) {
     camPos.set(cx + fx * 0.6, cy + 1.25, cz + fz * 0.6);
     camLook.set(cx + fx * 20, cy + 1.0 + car.rslope * 20, cz + fz * 20);
   } else {
-    const dist = (camMode === 0 ? 7.2 : 11) + airCam * 7, hgt = (camMode === 0 ? 2.5 : 3.8) + airCam * 4;   // pull back and up on big jumps
-    const back = dist + sp * 0.025;
+    // chase cam close behind (5.6 m, it was 7.2 before the sculpted cars), far chase as before; pull back and up on big jumps
+    const dist = (camMode === 0 ? 5.6 : 11) + airCam * 7, hgt = (camMode === 0 ? 1.9 : 3.8) + airCam * 4;
+    const back = dist + sp * (camMode === 0 ? 0.015 : 0.025);
     const want = new THREE.Vector3(cx - dx * back, cy + hgt - car.rslope * back * 0.6, cz - dz * back);
     const look = new THREE.Vector3(cx + fx * 4, cy + 0.9 + car.rslope * 4, cz + fz * 4);
     if (!camInit) { camPos.copy(want); camLook.copy(look); camInit = true; }
@@ -1075,7 +1113,7 @@ function frame(now) {
     while (acc >= STEP) { stepRace(STEP, inp); acc -= STEP; }
     // the player fell: watch the car drop for a moment, fade to black, put it back before the jump
     if (pc.fell) {
-      if (!fallCam) { fallCam = camera.position.clone(); flash('掉下去了！', '#ff3d7f'); }
+      if (!fallCam) { fallCam = camera.position.clone(); flash(T('掉下去了！'), '#ff3d7f'); }
       const f = player.fallT || 0;
       $('fade').style.opacity = String(Math.max(0, Math.min(1, (f - 1.0) / 0.35)));
       if (f > 1.45) { resetToTrack(player); player.fallT = 0; fallCam = null; camInit = false; }
@@ -1141,6 +1179,7 @@ function frame(now) {
   if (coastScene) coastScene.update(t);
   if (metroScene) metroScene.update(t);
   if (iceScene) { iceScene.update(t, dt, camera); iceScene.sky.material.uniforms.time.value = t; }
+  if (colossusScene) colossusScene.update(t);
   if (reefScene) { reefScene.update(t, dt, camera); track.beat.value = 0.45 + 0.25 * Math.sin(t * 1.4); drawSpeedLines(dt); }
   if (canyonScene) {
     canyonScene.update(t, dt, state === 'title' ? null : player.car);
@@ -1163,7 +1202,7 @@ function frame(now) {
     if (state === 'race' && gust > 0 && track.exposed[player.car.trackI] && !player.car.air) {
       const i = player.car.trackI, f = gust * gustDir * 4.5 * dt;
       player.car.vx += track.nx[i] * f; player.car.vz += track.nz[i] * f;
-      if (gust > 0.97) flash('侧风！', '#9fd8ff');
+      if (gust > 0.97) flash(T('侧风！'), '#9fd8ff');
     }
     drawSpeedLines(dt);
   }
@@ -1226,17 +1265,17 @@ function frame(now) {
     const fps = frames / fpsT; frames = 0; fpsT = 0;
     // iOS Low Power Mode pins the browser at 30 fps; lowering quality can't help there, so leave it alone
     const capped30 = fps > 27 && fps < 33;
-    if (capped30 && state === 'race' && !warned30) { warned30 = true; flash('帧数被系统限制在 30（可能开了低电量模式）'); }
-    if (autoDegrade && fps < 40 && !capped30 && state === 'race') {
+    if (capped30 && state === 'race' && !warned30) { warned30 = true; flash(T('帧数被系统限制在 30（可能开了低电量模式）')); }
+    if (autoDegrade && gfxId !== 'max' && fps < 40 && !capped30 && state === 'race') {   // Max is for computers that want the picture, never trade it away
       fpsLow++;
       if (fpsLow >= 3) {
         fpsLow = 0;
         if (pixelRatio > 0.75) { pixelRatio = Math.max(0.75, pixelRatio - 0.2); renderer.setPixelRatio(pixelRatio); resize(); }
-        else if (useBloom && fps < 40) { useBloom = false; flash('画面已自动调低，保持流畅'); }
-        else if (sun && sun.castShadow && fps < 40) { sun.castShadow = false; flash('已关闭阴影，保持流畅'); }
+        else if (useBloom && fps < 40) { useBloom = false; flash(T('画面已自动调低，保持流畅')); }
+        else if (sun && sun.castShadow && fps < 40) { sun.castShadow = false; flash(T('已关闭阴影，保持流畅')); }
       }
     } else fpsLow = 0;
-    $('perf').textContent = `${Math.round(fps)} FPS · 渲染倍率 ${pixelRatio.toFixed(2)}`;
+    $('perf').textContent = T('{0} FPS · 渲染倍率 {1}', Math.round(fps), pixelRatio.toFixed(2));
   }
 }
 
@@ -1282,12 +1321,12 @@ const remotePool = HUMAN_PAINTS.map(([paint, ui, glow]) => {
   return r;
 });
 
-const ERRS = { nosuch: '没有这个房间，检查一下房间码。', full: '房间满了（最多 5 人）。', started: '这个房间正在比赛，等这一局结束再加入。', network: '连不上联机服务器，检查网络后再试。' };
+const ERRS = Object.fromEntries(Object.entries({ nosuch: '没有这个房间，检查一下房间码。', full: '房间满了（最多 5 人）。', started: '这个房间正在比赛，等这一局结束再加入。', network: '连不上联机服务器，检查网络后再试。' }).map(([k, s]) => [k, T(s)]));
 function lobbyView(v) {
   $('lobby').hidden = !v;
   $('lobbyJoin').hidden = v !== 'join';
   $('lobbyRoom').hidden = v !== 'room';
-  $('leaveroom').textContent = v === 'room' ? '离开房间' : '返回';
+  $('leaveroom').textContent = T(v === 'room' ? '离开房间' : '返回');
 }
 function openLobby(prefill) {
   sound.init();
@@ -1298,10 +1337,10 @@ function openLobby(prefill) {
 }
 async function joinRoom(code, create) {
   code = cleanCode(code);
-  if (code.length < 4) { $('lobbyErr').textContent = '房间码是 4 位字母或数字。'; return; }
-  const name = ($('pname').value || '').trim() || '玩家';
+  if (code.length < 4) { $('lobbyErr').textContent = T('房间码是 4 位字母或数字。'); return; }
+  const name = ($('pname').value || '').trim() || T('玩家');
   store.set('nr-name', name);
-  $('lobbyErr').textContent = '连接中…';
+  $('lobbyErr').textContent = T('连接中…');
   try {
     const r = await net.connect(code, { name, create, cfg: { map: mapId, ai: lobbyAi, diff: lobbyDiff, mod: lobbyMod } });
     room = { ...r, code };
@@ -1309,7 +1348,7 @@ async function joinRoom(code, create) {
     onRoom(r);
   } catch (e) { $('lobbyErr').textContent = ERRS[e] || ERRS.network; }
 }
-function inviteText() { return `来玩赛车！打开 https://night-racer.pages.dev/#${room.code} ，点「联机」就能加入，房间码 ${room.code}`; }
+function inviteText() { return T('来玩赛车！打开 https://night-racer.pages.dev/#{0} ，点「联机」就能加入，房间码 {0}', room.code); }
 
 function onRoom(r) {
   room = { ...room, ...r };
@@ -1328,19 +1367,19 @@ function onRoom(r) {
 function renderRoom() {
   const isHost = room.host === room.you;
   $('roomcode').textContent = room.code;
-  $('roominfo').textContent = `地图：${MAP.name} · ${LAPS} 圈 · 玩家之间不碰撞`;
+  $('roominfo').textContent = T('地图：{0} · {1} 圈 · 玩家之间不碰撞', T(MAP.name), LAPS);
   const ul = $('plist'); ul.replaceChildren();
   room.players.forEach((p, k) => {
     const li = document.createElement('li');
     li.style.setProperty('--c', p.id === room.you ? PLAYER_COLOR : HUMAN_PAINTS[k % HUMAN_PAINTS.length][1]);
     li.append(p.name);
-    if (p.id === room.host) { const h = document.createElement('span'); h.className = 'tagh'; h.textContent = '房主'; li.append(h); }
-    if (p.id === room.you) { const m = document.createElement('span'); m.className = 'me'; m.textContent = '（你）'; li.append(m); }
+    if (p.id === room.host) { const h = document.createElement('span'); h.className = 'tagh'; h.textContent = T('房主'); li.append(h); }
+    if (p.id === room.you) { const m = document.createElement('span'); m.className = 'me'; m.textContent = T('（你）'); li.append(m); }
     ul.append(li);
   });
   $('hostctl').style.display = isHost ? '' : 'none';
   $('mpstart').hidden = !isHost; $('waitnote').hidden = isHost;
-  $('waitnote').textContent = '等房主开始…';
+  $('waitnote').textContent = T('等房主开始…');
   document.querySelectorAll('[data-ai]').forEach(b => b.setAttribute('aria-pressed', String(Number(b.dataset.ai) === room.cfg.ai)));
   document.querySelectorAll('[data-mpdiff]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.mpdiff === room.cfg.diff)));
   document.querySelectorAll('[data-mpmod]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.mpmod === (room.cfg.mod ? '1' : '0'))));
@@ -1389,7 +1428,7 @@ function onStart(m) {
   for (const id of m.order) {
     if (id === room.you) { humans.push(player); continue; }
     const r = remotePool[others.indexOf(id) % remotePool.length];
-    r.name = (room.players.find(p => p.id === id) || {}).name || '玩家';
+    r.name = (room.players.find(p => p.id === id) || {}).name || T('玩家');
     r.label.textContent = r.name; r.buf = []; r.net = null; r.off = null; r.pt = null; r.drawn = false;
     r.netId = id; r.touchAt = 0; r.bumpSent = 0;
     mp.remotes.set(id, r); humans.push(r);
@@ -1436,12 +1475,12 @@ net.on('room', onRoom).on('start', onStart)
   .on('left', m => {
     if (!mp) return;
     const r = mp.remotes.get(m.id);
-    if (r) { r.car.root.visible = false; r.label.hidden = true; racers = racers.filter(x => x !== r); mp.remotes.delete(m.id); flash(`${r.name} 离开了`, '#ffd23d'); }
+    if (r) { r.car.root.visible = false; r.label.hidden = true; racers = racers.filter(x => x !== r); mp.remotes.delete(m.id); flash(T('{0} 离开了', r.name), '#ffd23d'); }
     if (m.id === mp.host) { for (const a of mp.ai) { a.car.root.visible = false; a.label.hidden = true; } racers = racers.filter(x => !mp.ai.includes(x)); mp.ai = []; mp.host = m.host; mp.isHost = m.host === room?.you; }
   })
   .on('disconnect', () => {
-    if (mp) flash('联机断开了，继续单人跑完这一局', '#ff3d7f');
-    else if (room) { room = null; openLobby(); lobbyView('join'); $('lobbyErr').textContent = '和服务器的连接断开了。'; }
+    if (mp) flash(T('联机断开了，继续单人跑完这一局'), '#ff3d7f');
+    else if (room) { room = null; openLobby(); lobbyView('join'); $('lobbyErr').textContent = T('和服务器的连接断开了。'); }
     room = null;
   });
 
@@ -1506,7 +1545,7 @@ function drawRemote(r, dt) {
   const P = c.prev; P.x = c.x; P.y = c.y; P.z = c.z; P.h = c.h; P.slope = c.slope; P.roll = c.roll; P.pitch = c.pitch; P.spin = c.spin;
 }
 
-$('mpbtn').hidden = false;
+$('mpbtn').hidden = __CG__;
 $('mpbtn').addEventListener('click', () => openLobby());
 $('mkroom').addEventListener('click', () => joinRoom(newRoomCode(), true));
 $('joinbtn').addEventListener('click', () => joinRoom($('joincode').value, false));
@@ -1516,7 +1555,7 @@ $('leaveroom').addEventListener('click', () => (room ? leaveRoom() : lobbyView(n
 $('mpstart').addEventListener('click', () => net.send({ t: 'start' }));
 $('copycode').addEventListener('click', async () => {
   const text = inviteText();
-  try { await navigator.clipboard.writeText(text); $('roomErr').textContent = '已复制，粘贴到微信群发给朋友。'; }
+  try { await navigator.clipboard.writeText(text); $('roomErr').textContent = T('已复制，粘贴到微信群发给朋友。'); }
   catch { $('roomErr').textContent = text; }
 });
 document.querySelectorAll('[data-ai]').forEach(b => b.addEventListener('click', () => { lobbyAi = Number(b.dataset.ai); store.set('nr-mp-ai', lobbyAi); net.send({ t: 'cfg', cfg: { ai: lobbyAi } }); }));

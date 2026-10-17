@@ -1,5 +1,7 @@
 // Global leaderboard client: best lap per map, uploaded automatically once the player has a name.
-const API = (location.protocol === 'https:' || location.protocol === 'http:' ? '' : 'https://night-racer.pages.dev') + '/api/board';
+import { t as T } from './i18n.js';
+// same-origin on our own site; the downloadable file copy and the CrazyGames build call it across origins (CORS is open)
+const API = (!__CG__ && (location.protocol === 'https:' || location.protocol === 'http:') ? '' : 'https://night-racer.pages.dev') + '/api/board';
 // the same per-map keys main.js stores laps under (every map, so a new one is never left off the board)
 const K = (m, k) => (m === 'city' ? 'nr-' + k : `nr-${k}-${m}`);
 // 标准组 and 改装组 keep separate records and separate boards (the 改装组 board is "<map>_mod" on the server)
@@ -54,13 +56,13 @@ export function createBoard({ store, fmt, maps }) {
     document.querySelectorAll('[data-lbmap]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.lbmap === map)));
     document.querySelectorAll('[data-lbgroup]').forEach(b => b.setAttribute('aria-pressed', String((b.dataset.lbgroup === 'mod') === mod)));
     const body = $('lbbody'), info = $('lbme');
-    body.replaceChildren(); info.textContent = '加载中…';
+    body.replaceChildren(); info.textContent = T('加载中…');
     let d;
     try { await sync(map, mod); d = await load(map, mod); }
-    catch { info.textContent = '连不上排行榜服务器，稍后再试。'; return; }
+    catch { info.textContent = T('连不上排行榜服务器，稍后再试。'); return; }
     if (shown !== map || shownMod !== mod) return;
-    if (!d.top.length) info.textContent = `${maps[map].name}（${mod ? '改装组' : '标准组'}）还没有人上榜，来当第一个吧。`;
-    else info.textContent = d.me ? `你的最快圈 ${fmt(d.me.t)}，排第 ${d.me.rank} 名（共 ${d.total} 人）` : (name() ? `跑完一圈就能上榜（共 ${d.total} 人）` : `设置名字后，你的最快圈会自动上榜（共 ${d.total} 人）`);
+    if (!d.top.length) info.textContent = T('{0}（{1}）还没有人上榜，来当第一个吧。', T(maps[map].name), T(mod ? '改装组' : '标准组'));
+    else info.textContent = d.me ? T('你的最快圈 {0}，排第 {1} 名（共 {2} 人）', fmt(d.me.t), d.me.rank, d.total) : T(name() ? '跑完一圈就能上榜（共 {0} 人）' : '设置名字后，你的最快圈会自动上榜（共 {0} 人）', d.total);
     d.top.forEach((e, k) => {
       const tr = document.createElement('tr'); if (e.me) tr.className = 'me';
       for (const v of [k + 1, e.name, fmt(e.t)]) { const td = document.createElement('td'); td.textContent = v; tr.append(td); }
@@ -77,10 +79,10 @@ export function createBoard({ store, fmt, maps }) {
   $('lbclose').addEventListener('click', () => { $('board').hidden = true; });
   $('lbsave').addEventListener('click', async () => {
     const n = $('lbname').value.trim().slice(0, 10);
-    if (!n) { $('lbme').textContent = '名字不能为空。'; return; }
+    if (!n) { $('lbme').textContent = T('名字不能为空。'); return; }
     store.set('nr-name', n);
     const res = await syncAll();
-    if (res.some(x => x && x.badName)) { $('lbme').textContent = '这个名字含有不允许的词，换一个吧。'; return; }
+    if (res.some(x => x && x.badName)) { $('lbme').textContent = T('这个名字含有不允许的词，换一个吧。'); return; }
     render(shown);
   });
   $('lbname').addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') $('lbsave').click(); });

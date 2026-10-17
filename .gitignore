@@ -5,3 +5,6 @@ server/.wrangler/
 sound-preview/
 .DS_Store
 tripo-out/
+dist-cg/
+night-racer-crazygames.zip
+crazygames/*.zip

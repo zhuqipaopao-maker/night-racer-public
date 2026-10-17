@@ -1,0 +1,9 @@
+{
+  "src": "tripo-out/film",
+  "assets": {
+    "sakura": [1024, "sakura2"], "bench": 512, "lamp": 512, "tower": 1024, "ferris": 1024, "volcano": 1024,
+    "lavarock": 512, "cqbuild_a": 1024, "cqbuild_b": 1024, "monorail": 512, "taxi": 512, "stadium": 1024, "lantern": 256
+  },
+  "low": { "sakura": 2500 },
+  "cut_below": { "monorail": 0.45 }
+}
